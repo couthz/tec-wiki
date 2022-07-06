@@ -1,0 +1,47 @@
+created: 20220615111508948
+creator: TidGiUser
+difficulty: 5
+due: 20220623111739073
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111739073
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111739073
+stability: 2
+tags: mysql fx ?
+title: ICP:索引条件下推
+type: text/vnd.tiddlywiki
+
+索引条件下推：是把查询中与被使用索引有关的查询条件下推到存储引擎中判断，而不是返回到server层再判断，适用于二级索引，只适用于select语句
+
+当没有icp时：存储引擎会利用where先定位二级索引记录，然后回表查聚簇索引记录，最后将记录发送给MySQL server去计算剩余的where条件是否正确（重点是在server端计算）。
+
+当有icp时，利用二级索引定位记录之后，如果剩余的where条件也可以通过二级索引来过滤（意思就是索引中包含的信息足以计算这一部分where条件），那么MySQL Server就会将这部分索引条件下推到（index condition push）存储引擎（下推的意思可以看MySQL逻辑架构图）去计算（这里是在存储引擎端就把计算给做了，不需要在发送到server端），这样的话可以减少回表，也尽量少的让MySQL Server访问存储引擎层。
+
+''一言以蔽之，在一个用到索引的查询当中，所有二级索引里包含的信息，都可以通过“ICP机制”被用到“在二级索引中过滤尽可能多的行”。''
+
+使用索引下推的标志是explain的extra列中显示了Using index condition。
+
+示例：
+
+有一个联合索引(a,b,c)，当查询where a=x and c=x2，根据最左匹配原则，只有a会用得上，对于c不同版本就有区别了：
+
+在MySQL5.6之前，就是根据二级索引找出每一条a=x的叶子节点的主键，然后拿着主键去回表，根据回表拿到对应行c的值，将不符合c=x2的行过滤掉
+在MySQL5.6引入了索引下推优化，找到a=x后，因为在二级索引中就有c的值了，MySQL Server 就会将c=x2这个索引条件下推给存储引擎去做，所以在二级索引内就判断该行是否符合c=x2，不符合直接就跳过了，这样就少了很多次回表
+
+索引下推使用条件：
+
+只能用于range、 ref、 eq_ref、ref_or_null访问方法；
+
+只能用于InnoDB和 MyISAM存储引擎及其分区表；
+
+对InnoDB存储引擎来说，索引下推只适用于二级索引（非主键索引）;
+
+引用了子查询的条件不能下推；
+
+引用了存储函数的条件不能下推，因为存储引擎无法调用存储函数。
+

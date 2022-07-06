@@ -1,0 +1,141 @@
+created: 20220704114206319
+creator: TidGiUser
+modified: 20220705025132446
+modifier: TidGiUser
+tags: 分布式ID高性能改造
+title: 00.snowflake原理
+type: text/vnd.tiddlywiki
+
+! 为什么要有分布式ID
+''同⼀个逻辑表内的不同实际表之间的⾃增键由于⽆法互相感知而产⽣重复主键。''
+
+虽然可通过约束⾃增主键初始值和步⻓的⽅式避免碰撞，但需引⼊额外的运维规则，''使解决⽅案缺乏完整性和可扩展性。''
+
+> 比如4个表,初始id分别为1,2,3,4, 步长都为4, 如果再拆表, 就还得改规则
+
+全局唯一的ID算法: UUID(''无序''), snowflake,基于数据库,mongodb自增ID
+
+<<<
+UUID是指在一台机器上生成的数字，''它保证对在同一时空中的所有机器都是唯一的''。通常平台会提供生成的API。按照开放软件基金会(OSF)制定的标准计算，用到了以太网卡地址、纳秒级时间、芯片ID码和许多可能的数字
+UUID由以下几部分的组合：
+（1）当前日期和时间，UUID的第一个部分与时间有关，如果你在生成一个UUID之后，过几秒又生成一个UUID，则第一个部分不同，其余相同。
+（2）时钟序列。
+（3）全局唯一的IEEE机器识别号，如果有网卡，从网卡MAC地址获得，没有网卡以其他方式获得。
+
+''从这个意义上来说, 一个机器如果并发生成UUID, 有可能会重复,除非生成的逻辑中再引入同步机制(比如添加一段原子性自增的数字),但一个机器只有一个进程去生成ID, 就没事了''
+<<<
+
+! 为什么选择snowflake
+
+分布式ID的选型: https://cloud.tencent.com/developer/article/1952539
+
+snowflake,uuid,基于数据库,mongodb自增ID, 人们还是倾向于选择雪花ID
+
+! SnowFlake原理
+
+SnowFlake算法的优点：
+
+* 生成ID时不依赖于DB，完全在内存生成，高性能高可用。
+* ID呈趋势递增，后续插入索引树的时候性能较好。
+
+SnowFlake算法的缺点：
+
+* 依赖于系统时钟的一致性。如果某台机器的系统时钟回拨，有可能造成ID冲突，或者ID乱序
+
+要点:
+
+* 41 bit 是当前毫秒单位的一个时间戳；
+
+* 然后 5 bit 是你传递进来的一个机房 id（但是最大只能是 32 以内），另外 5 bit 是你传递进来的机器 id（但是最大只能是 32 以内)(''注意这一项其实不一定递增'')
+
+* 剩下的那个 12 bit 序列号，就是如果跟你上次生成 id 的时间还在一个毫秒内，那么会把顺序给你累加，''最多在 4096 个序号以内''。
+
+''所以你自己利用这个工具类，自己搞一个服务，然后对每个机房的每个机器都初始化这么一个东西''，刚开始这个机房的这个机器的序号就是 0。然后每次接收到一个请求，说这个机房的这个机器要生成一个 id，你就找到对应的 Worker 生成
+
+
+[img[截屏2022-07-05 10.15.07.png]]
+
+! 时钟回拨问题
+
+一般生产环境会专门配置一台机器(ntp服务器)作为时钟服务, 其他机器连接它, 完成时钟校准
+
+那么有可能因为各种原因, 某台机器时钟出现错误, ''从而发生时钟的跳跃或者回拨'', 这时snowflake由于强依赖时钟, 就有可能出现重复
+
+解决代码(org.apache.shardingsphere.core.strategy.keygen.SnowflakeShardingKeyGenerator#waitTolerateTimeDifferenceIfNeed)
+
+基本的逻辑就是发生回拨的时候(比较这次和上次), 如果超过最大容忍时间(默认10ms,可配置)就抛异常(''抛异常,不太优雅''), 否则就sleep差异时间,等待时间追上去(''也不优雅'')
+
+> 逻辑应该是:回拨的时间如果太长, 我就不等了??????
+
+```java
+    //处理时钟回拨问题
+    @SneakyThrows
+    private boolean waitTolerateTimeDifferenceIfNeed(final long currentMilliseconds) {
+        //没有发生回拨
+        if (lastMilliseconds <= currentMilliseconds) {
+            return false;
+        }
+
+
+        //发生回拨
+
+        long timeDifferenceMilliseconds = lastMilliseconds - currentMilliseconds;
+        Preconditions.checkState(timeDifferenceMilliseconds < getMaxTolerateTimeDifferenceMilliseconds(), 
+                "Clock is moving backwards, last time is %d milliseconds, current time is %d milliseconds", lastMilliseconds, currentMilliseconds);
+        Thread.sleep(timeDifferenceMilliseconds);
+        return true;
+    }
+```
+
+! 生成代码()
+要点:
+* 雪花算法,同样是保证对在同一时间中的所有机器都是唯一的, 那么这时如果一台机器有多个进程生成id, 还是可能重复的(多线程由于有synchronized,不会重复)
+
+* 不是高并发时反而会出现倾斜
+
+```java
+    @Override
+    public synchronized Comparable<?> generateKey() {
+        long currentMilliseconds = timeService.getCurrentMillis();
+
+        if (waitTolerateTimeDifferenceIfNeed(currentMilliseconds)) {
+            currentMilliseconds = timeService.getCurrentMillis();
+        }
+
+
+        // 没有跨毫秒，
+        if (lastMilliseconds == currentMilliseconds) {
+            if (0L == (sequence = (sequence + 1) & SEQUENCE_MASK)) {
+                currentMilliseconds = waitUntilNextTime(currentMilliseconds);
+            }
+        } else {
+            //跨了秒毫，如果本次生成id的时间与上一次生成id的时间不是同一毫秒即，跨了毫秒
+            //标准的雪花算法，在生成id时，则序列部分会从0开始计算。
+
+            //不是高并发环境下,每次生成id都可能跨毫秒，这样每次生成的id都是偶数，如果根据id进行奇偶分片或者取模分片，则数据全部落到偶数表
+            //可能导致数据倾斜
+            vibrateSequenceOffset();
+            sequence = sequenceOffset;
+        }
+        lastMilliseconds = currentMilliseconds;
+        return ((currentMilliseconds - EPOCH) << TIMESTAMP_LEFT_SHIFT_BITS) | (getWorkerId() << WORKER_ID_LEFT_SHIFT_BITS) | sequence;
+    }
+```
+
+sharding jdbc对于可能的倾斜问题的解决方案:
+
+每次跨毫秒重置序列号时, 不一定从0开始, 而是会自增, 但是自增不会超过设置的''max.vibration.offset'',''这个值在分片策略的编写中设置的''
+
+```
+    private void vibrateSequenceOffset() {
+        sequenceOffset = sequenceOffset >= getMaxVibrationOffset() ? 0 : sequenceOffset + 1;
+    }
+		
+    private int getMaxVibrationOffset() {
+        //该方法会读取max.vibration.offset的值，如果sequenceOffset大于或等于该值，则序列从0开始，否则序列每次在上次一次的基础上加1。
+        //如果max.vibration.offset配置为1，则每次的序列都按照0,1这个顺序反复取，如果配置位2，就按照0,1,2反复取。
+        int result = Integer.parseInt(properties.getProperty("max.vibration.offset", String.valueOf(DEFAULT_VIBRATION_VALUE)));
+        Preconditions.checkArgument(result >= 0 && result <= SEQUENCE_MASK, "Illegal max vibration offset");
+        return result;
+    }
+```

@@ -1,0 +1,11 @@
+created: 20220701073753218
+creator: TidGiUser
+modified: 20220701074520443
+modifier: TidGiUser
+tags: rocketmq fx undo
+title: 40.rocketmq单机存储架构
+type: text/vnd.tiddlywiki
+
+对标:[[06.kafka单机持久化(单机存储架构)]]
+
+[img[截屏2022-07-01 15.45.12.png]]

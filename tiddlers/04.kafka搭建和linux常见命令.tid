@@ -1,0 +1,67 @@
+created: 20220628075903094
+creator: TidGiUser
+modified: 20220628081613463
+modifier: TidGiUser
+tags: kafka
+title: 04.kafka搭建和linux常见命令
+type: text/vnd.tiddlywiki
+
+! 搭建server端
+1. zk搭建 略
+
+2. broker集群搭建
+
+
+[img[kafkabrokerdajian.png]]
+
+可见broker搭建完成之后,连接zk,controller就已经选出了
+
+3. 启动(集群每台机器分别启动):
+
+kafka-server-start.sh /root/soft/kafka_2.12-3.1.0/config/server.properties
+
+4. 查看zk的相关节点
+
+cluster
+[img[kafkazkcluster.png]]
+
+controller
+[img[kafkacontrollerzk.png]]
+
+broker
+[img[brokerkafkalinux.png]]
+
+可见zk中已经有了相关元数据
+
+! topic创建
+[img[截屏2022-06-28 16.10.24.png]]
+
+创建topic相当于一个基础设施的建立过程，还没有涉及生产消费，从命令中可以看出：
+
+1. 需要连接zk的某个节点，以此知道谁是controller
+
+2. 创建topic，要指定分片数，每个分片的副本数
+
+查看topic:
+
+[img[截屏2022-06-28 16.10.58.png]]
+
+! consumer
+
+[img[截屏2022-06-28 16.11.59.png]]
+
+1. —bootstrap-server 直连broker，老的consumer也是像topic一样去连zk
+
+2. 如果一个group起多个consumer，多个partition就会分配给不同的consumer，最多1:1，这时再起更多的consumer也没用了。
+
+> 这里可以看出消费的时候只是指定了消费者group,还有topic,具体消费哪个partition, 需要通过[[消费者负载均衡策略|01.kafka架构设计]]来决定
+
+查看消费者组信息:
+
+[img[截屏2022-06-28 16.15.30.png]]
+
+! producer
+
+指定broker-list
+
+[img[截屏2022-06-28 16.14.38.png]]

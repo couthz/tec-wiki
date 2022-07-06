@@ -1,0 +1,37 @@
+created: 20220620091452128
+creator: TidGiUser
+modified: 20220620091538225
+modifier: TidGiUser
+tags: AQS
+title: 01.AQS源码:模版方法与钩子函数
+type: text/vnd.tiddlywiki
+
+! AQS的模版模式
+AQS 出于变与不变分离的原则，AQS 基于模板模式实现。
+
+AQS 为锁获取、锁释放的排队、出队过程提供了一系列的模板方法;
+
+由于JUC的显式锁种类丰富，所以AQS将不同锁的具体操作抽取为钩子方法，供各种锁的子类(或则其内部类)去实现。
+
+
+AQS 定义了两种资源共享方式:
+
+* Exclusive(独享锁):只有一个线程能占有锁资源，如 ReentrantLock。又可分为公平锁和非 公平锁:
+
+* Share(共享锁):多个线程可同时占有锁资源，如 Semaphore/CountDownLatch。Semaphore、 CountDownLatch、 CyclicBarrier、ReadWriteLock 的 Read 锁。
+
+AQS 为不同的资源共享方式提供了不同的模板流程，''包括共享锁、独享锁模板流程''。
+
+这些模板流程，''完成了具体线程进出等待队列的(如获取资源失败入队/唤醒出队等)基础、通用逻辑。 基于通用、基础逻辑，AQS 提供一种实现阻塞锁和依赖 FIFO 等待队列的同步器的框架''，AQS 模 板为 ReentedLocK、CountDownLatch、Semaphore 提供了优秀的解决方案。
+
+自定义的同步器，''只需要实现共享资源 state 的获取与释放方式即可，这些逻辑都编写在钩子方法中即可''。无论是共享锁还是独享锁，AQS 在执行模板流程时，会回调自定义的钩子方法。
+
+自定义同步器时，AQS 中的需要重写的钩子方法大致如下:
+
+* tryAcquire(int):独占锁钩子，尝试获取资源。成功则返回 true，失败则返回 false。
+* tryRelease(int):独占锁钩子，尝试释放资源。成功则返回 true，失败则返回 false。
+* tryAcquireShared(int):共享锁钩子，尝试获取资源。尝试获取资源。负数表示失败;0 表示成功，但没有剩余可用资源;正数表示成功，且有剩余资源。
+* tryReleaseShared(int):共享锁钩子，尝试释放资源。成功则返回 true，失败则返回 false。 
+* isHeldExclusively():独占锁钩子，判断该线程是否正在独占资源。只有用到 condition 条件队列时才需要去实现它。
+
+* 以上钩子方法的默认实现，会抛出UnsupportedOperationException异常。除了这些钩子方法， AQS 类中的其他方法都是 final 类型的方法，所以无法被其他类继承，只有这几个方法可以 被其他类继承。

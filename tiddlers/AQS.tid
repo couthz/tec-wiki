@@ -1,0 +1,66 @@
+created: 20220618142024480
+creator: TidGiUser
+modified: 20220620090408805
+modifier: TidGiUser
+tags: 线程安全:原子性
+title: AQS
+type: text/vnd.tiddlywiki
+
+! AQS概述
+> ''AQS 的内部队列是 CLH 队列变种，每当线程通过 AQS 获取锁失败，线程将被封装成一个 Node 节点，通过 CAS 原子操作插入队列尾。当有线程释放锁时，AQS 会尝试让队头的后继节点占用锁。''
+
+AQS是[[CLH|CLH锁:AQS的前置知识]]队列的一个变种，主要原理和CLH队列差不多。AQS队列内部维护的是一个 FIFO的双向链表，这种结构的特点是每个 数据结构都有两个指针，分别指向直接的后继节点和直接前驱节点。所以双向链表可以从任意一个节点开始很方便的访问前驱和后继。每个Node其实是由线程封装，当线程争抢锁失败后会封 装成Node加入到AQS队列中去;当获取锁的线程释放锁以后，会从队列中唤醒一个阻塞的节点(线程)。AQS 的内部结构，具体如图所示
+
+> ''记住一句话:利用[[CAS|CAS]]自旋修改某个变量,就相当于给这个变量的地址加锁''
+
+[img[截屏2022-06-20 13.42.14.png]]
+
+
+! JUC显示锁与AQS的关系
+
+AQS是java.util.concurrent包的一个同步器，实现了锁的基本抽象功能，支持独占锁与共享锁两种方式。该类使用模板模式实现，成为构建锁和同步器的框架，使用该类可以简单且高效的构造出应用广泛的同步器(或者等待队列)。
+
+java.util.concurrent.locks 包中显式锁如 ReentrantLock、ReentrantReadWriteLock，线程同步工 具如 Semaphore，异步回调工具如 FutureTask 等，内部都使用了 AQS 作为等待队列。
+
+!! ReentrantLock 与 AQS 的组合关系
+
+ReentrantLock 一个可重入的互斥锁，又称为“''可重入独占锁''”;ReentrantLock锁在同一个时间点只能被一个线程锁持有;而可重入的意思是，ReentrantLock锁，可以被单个线程多次获取;
+
+''ReentrantLock 把所有 Lock 接口的操作都委派到一个 Sync 类上，该类继承了AbstractQueuedSynchronizer:
+''
+
+```java
+static abstract class Sync extends AbstractQueuedSynchronizer {...}
+```
+
+ReentrantLock 为了支持公平锁和非公平锁两种模式，为 Sync 又定义两个子类，具体如下:
+
+```java
+final static class NonfairSync extends Sync {...}
+final static class FairSync extends Sync {...}
+```
+
+NonfairSync 为非公平(或者不公平)同步器，FairSync 为公平同步器。ReentrantLock 提供 了两个构造器，具体如下:
+
+> 一般我们用的都是非公平锁
+
+```java
+public ReentrantLock() { //默认的构造器
+sync = new NonfairSync(); //内部使用非公平同步器
+}
+public ReentrantLock(boolean fair) { //true 为公平锁，否则为非公平锁 sync = fair ? new FairSync() : new NonfairSync();
+}
+```
+由 ReentrantLock 的 lock( )和 unlock( )的源码可以看到，它们只是分别调用了 sync 对象的 lock( )和 release( )方法。
+
+```
+public void lock() { //抢占显式锁 sync.lock();
+}
+public void unlock() { //释放显式锁 sync.release(1);
+}
+```
+
+ReentrantLock 的显式锁操作，是委托(或委派)给一个 Sync 内部类的实例完成的。而 Sync 内部类只是 AQS 的一个子类，所以在本质上，ReentrantLock 的显 式锁操作，是委托(或委派)给 AQS 完成的。''一个 ReentrantLock 对象的内部，一定有一个 AQS 类型的组合实例，二者之间是[[组合关系|类之间的关系:组合关系]]''
+
+[img[截屏2022-06-20 15.09.50.png]]
+

@@ -1,0 +1,102 @@
+created: 20220617112349619
+creator: TidGiUser
+difficulty: 5
+due: 20220623111809984
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111809984
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111809984
+stability: 2
+tags: Java题目 fx ?
+title: equals 和 ==的区别 ？？为什么要重写equals和hashcode
+type: text/vnd.tiddlywiki
+
+! equals和== 区别：
+1. ==是运算符，equals是object类定义的方法（object类 == 和equals没区别）
+
+2. ==能用于基本和引用类型，equals只能用于引用类型
+
+3. ==：基本数据类型就是值相等，引用数据类型就是地址是否相等。equals不重写，也是判断引用数据类型地址是否相等，如果重写，就看我们自己的定义是啥了
+
+! 为什么要重写equals方法？？
+
+> 没有哪个类是孤立存在的。一个类的实例常常被传递给另一个类的实例
+
+Object 是一个具体的类，但它主要是为继承而设计的。它的所有非 final 方法 (equals、hashCode、 toString、clone 和 finalize) 都有清晰的通用约定(general contracts)，因为它们被设计为被子类重写。任何类都有义务重写这些方法，以遵从他们的通用约定;
+
+''如果不这样做，将会阻止其他依赖于约定的类与此类一起正常工作。许多类，包括所有的集合类，都依赖于传递给它们遵守 equals 约定的对象''
+
+> 例如List的equals方法,就是判断size相同,并且调用每个元素的equals方法逐个比较
+
+当然，也不是所有object的子类都会去重写equals方法：
+1. 私有类没必要，外界根本不调用
+
+2. 一般表示“行为”的类不需要提供一个“逻辑相等”的方法，例如Thread这种代表活动实体而不是值的类，再如我们写的哪些service方法。而表示“值”的类需要提供，当然也有例外，比如枚举类型，这种每个值至多存在一个对象
+
+3. 父类已经重写equals方法了，且父类的行为适合于子类。例如，大多数 Set 从 AbstractSet 继承了 equals 实现、List 从 AbstractList 继承了 equals 实现
+
+equals的健壮写法：
+
+> 自身示例 instanceof 自身类或者父类
+> 自身类.class.isInstance(自身实例或子类实例)
+> 自身类.class.isAssignableFrom(自身类或子类.class)
+
+(1) 如果子类定义equals
+
+```java
+public boolean equals (Object otherObject){
+    if(this == otherObject)                       //判断是否引用同一个对象
+        return true;
+ 
+    if(otherObject == null)                       //判断是否为null
+        return false;
+    //如果equals的语义在每一个子类中都有改变，则使用getclass判断类名必须一致。如果子类和超类都使用getclass，则子类定义equals时先判断超类的equals，即if(! (super.equals(otherObject)))  return false;
+   // if(getclass() ！= otherObject.getClass)    
+   //     return false;
+ 
+    ClassName other = (ClassName) otherObject;    //转型为同类对象
+ 
+    //比较需要判定的实例域。为了防备field2为null，使用Objects.equals方法,当两个实例域都为null时判定为true，如果使用field2.equals(other.field2)则都为null时会放回false。
+    return field1 == other.field1 && Objects.equals(field2,other.field2); 
+ 
+ 
+}
+```
+(2) 如果父类定义equals
+
+```java
+public final boolean equals (Object otherObject){
+ 
+    if(this == otherObject)                       //判断是否引用同一个对象
+        return true;
+ 
+    if(otherObject == null)                       //判断是否为null
+        return false;
+ 
+    //如果equals在每个子类中都有相同的语义，即子类判断equals的原则都一样，则用instanceof。并且可以将equals方法定义为final表示不用更改，也就是将这个方法静态绑定。
+		//其实这种情况不用判断null,因为null instanceof xxx 一定为false
+    if(!(otherObject instanceof ClassName))
+        return false;
+ 
+    ClassName other = (ClassName) otherObject;    //转型为同类对象
+ 
+    //比较需要判定的实例域。为了防备field2为null，使用Objects.equals方法,当两个实例域都为null时判定为true，如果使用field2.equals(other.field2)则都为null时会放回false。
+    return field1 == other.field1 && Objects.equals(field2,other.field2); 
+ 
+ 
+}
+```
+
+! 为什么重写hashcode
+由于hash function的理想化定义是:
+
+(1)非负整数
+
+(2)equals 为true,hashcode为true,反之成立
+
+因此重写了equals一定要重写hashcode

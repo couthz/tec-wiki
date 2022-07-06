@@ -1,0 +1,9 @@
+created: 20220625085601630
+creator: TidGiUser
+modified: 20220627124600365
+modifier: TidGiUser
+tags: fx mq
+title: kafka
+type: text/vnd.tiddlywiki
+
+系统高可用4个9, 要求每个中间件都达到高可用4个9

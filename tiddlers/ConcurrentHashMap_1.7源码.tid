@@ -1,0 +1,156 @@
+created: 20220618091208010
+creator: TidGiUser
+modified: 20220618112634571
+modifier: TidGiUser
+tags: ConcurrentHashMap
+title: ConcurrentHashMap:1.7源码
+type: text/vnd.tiddlywiki
+
+! 结构
+
+ConcurrentHashMap是一个Segment数组组成，Segment通过继承ReentrantLock来进行加锁，所以每次需要加锁的操作锁住的是一个Segment，这样只要保证每个Segment是线程安全的，也就实现了全局的线程安全。
+
+每个Segment其实是个小hash表(hashentry[])
+
+每次扩容也只是扩容一个segment中的hashentry[]
+
+并发级别16:
+[img[截屏2022-06-18 17.46.13.png]]
+
+! 重要的前置知识:CAS
+
+见[[CAS]]
+
+! put方法
+
+```java
+public V put(K key, V value) {
+    Segment<K,V> s;
+    if (value == null)
+        throw new NullPointerException();
+    int hash = hash(key.hashCode());
+    int j = (hash >>> segmentShift) & segmentMask; //16-1
+    if ((s = (Segment<K,V>)UNSAFE.getObject          // nonvolatile; recheck
+         (segments, (j << SSHIFT) + SBASE)) == null) //  in ensureSegment
+        s = ensureSegment(j);
+    return s.put(key, hash, value, false);
+}
+```
+```java
+private Segment<K,V> ensureSegment(int k) {
+        final Segment<K,V>[] ss = this.segments;
+        long u = (k << SSHIFT) + SBASE; // raw offset
+        Segment<K,V> seg;
+        if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u)) == null) {
+           //其实乐观锁从这次读取,就相当于加上了
+           //初始化segment cas
+            Segment<K,V> proto = ss[0]; // use segment 0 as prototype
+            int cap = proto.table.length;
+            float lf = proto.loadFactor;
+            int threshold = (int)(cap * lf);
+            HashEntry<K,V>[] tab = (HashEntry<K,V>[])new HashEntry[cap];
+            
+            if ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                == null) { // recheck,这个recheck其实不加也不会影响线程安全,主要是提高效率
+                Segment<K,V> s = new Segment<K,V>(lf, threshold, tab);
+                //读当前segment的值为null,用cas确保没有其他线程完成初始化
+                //cas也可能失败,这时如果有其他线程初始化segment,就用那个线程初始化的segment
+                while ((seg = (Segment<K,V>)UNSAFE.getObjectVolatile(ss, u))
+                       == null) {
+                    if (UNSAFE.compareAndSwapObject(ss, u, null, seg = s))
+                        break;
+                }
+            }
+        }
+        return seg;
+    }
+```
+```java
+final V put(K key, int hash, V value, boolean onlyIfAbsent) {
+    //tryLock其实就是非阻塞获取锁,得到锁同时返回true,没得到就返回false
+   //lock没得到锁就会阻塞
+    HashEntry<K,V> node = tryLock() ? null :
+        scanAndLockForPut(key, hash, value);
+    V oldValue;
+    try {
+        HashEntry<K,V>[] tab = table;
+        int index = (tab.length - 1) & hash;
+        HashEntry<K,V> first = entryAt(tab, index);
+        for (HashEntry<K,V> e = first;;) {
+            if (e != null) {
+                K k;
+                if ((k = e.key) == key ||
+                    (e.hash == hash && key.equals(k))) {
+                    oldValue = e.value;
+                    if (!onlyIfAbsent) {
+                        e.value = value;
+                        ++modCount;
+                    }
+                    break;
+                }
+                e = e.next;
+            }
+            //map中还没有没有key相同的元素:头插法
+            else {
+                if (node != null)
+                    node.setNext(first);
+                else
+                    node = new HashEntry<K,V>(hash, key, value, first);
+                int c = count + 1;
+                if (c > threshold && tab.length < MAXIMUM_CAPACITY)
+                    rehash(node);
+                else
+                    setEntryAt(tab, index, node);
+                ++modCount;
+                count = c;
+                oldValue = null;
+                break;
+            }
+        }
+    } finally {
+        unlock();
+    }
+    return oldValue;
+}
+```
+```java
+//没抢到锁的线程
+//1. 自旋获取锁,超过64改成阻塞获取
+//2. 自旋过程中会检查自己即将插入的对应槽位是不是空的,如果空的就提前new一个 node
+private HashEntry<K,V> scanAndLockForPut(K key, int hash, V value) {
+    HashEntry<K,V> first = entryForHash(this, hash);
+    HashEntry<K,V> e = first;
+    HashEntry<K,V> node = null;
+    int retries = -1; // negative while locating node
+    //循环查找链表中有没有相同key的元素，如果没有,就创建新node(如果其他线程抢先创建了一个key相同的node怎么办，
+//外层仍然会遍历检查的)
+    //如果有，也继续自旋,直到次数达到64次
+    //自旋过程中，隔一次会查询是否结构变化了，如果变化了,重新进行链表key的查找（有可能上次不需要new，但是扩容之后需要new了）
+    //每次循环都会尝试一次获取锁
+    //那感觉这里仅仅是提前一步new了，没多大用啊
+    while (!tryLock()) {
+        HashEntry<K,V> f; // to recheck first below
+        if (retries < 0) {
+            if (e == null) {
+                if (node == null) // speculatively create node
+                    node = new HashEntry<K,V>(hash, key, value, null);
+                retries = 0;
+            }
+            else if (key.equals(e.key))
+                retries = 0;
+            else
+                e = e.next;
+        }
+        else if (++retries > MAX_SCAN_RETRIES) { //自旋超过64次
+            lock(); //不自旋了,改为阻塞时获取锁,类似于锁升级
+            break;
+        }
+        else if ((retries & 1) == 0 &&
+                 (f = entryForHash(this, hash)) != first) {
+            e = first = f; // re-traverse if entry changed
+            retries = -1;
+        }
+    }
+    return node;
+}
+```

@@ -1,0 +1,23 @@
+created: 20220706083827982
+creator: TidGiUser
+modified: 20220706223753304
+modifier: TidGiUser
+tags: mysql事务(主要基于inoodb的原理) fx mysql主从复制与读写分离
+title: 02.redo log
+type: text/vnd.tiddlywiki
+
+! redo log保障持久性,数据可靠性的技术:WAL
+
+MySQL里常说的WAL技术，全称是Write Ahead Log，''即当事务提交时，先写redo log，再修改页。''
+
+<<<
+redo log&Write-Ahead 的本质: 
+
+MySQL真正使用WAL的原因是：磁盘的写操作是随机IO，比较耗性能，所以如果把每一次的更新操作都先写入log中，那么就成了顺序写操作，实际更新操作由后台线程再根据log异步写入。这样对于client端，延迟就降低了。并且，由于顺序写入大概率是在一个磁盘块内，这样产生的IO次数也大大降低。所以WAL的核心在于将随机写转变为了顺序写，降低了客户端的延迟，提升了吞吐量。
+<<<
+
+[img[截屏2022-07-06 23.11.03.png]]
+
+! 保障数据可靠性的另一个技术:两阶段提交
+
+https://baijiahao.baidu.com/s?id=1719905225647709469&wfr=spider&for=pc

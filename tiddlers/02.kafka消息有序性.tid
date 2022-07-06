@@ -1,0 +1,40 @@
+created: 20220627124613474
+creator: TidGiUser
+modified: 20220628072036121
+modifier: TidGiUser
+tags: kafka fx undo
+title: 02.kafka消息有序性
+type: text/vnd.tiddlywiki
+
+
+! producer
+除了broker内部的机制之外
+
+1. 在producer端就要保证有序:如果producer是个集群, 而消息一开始就打到了多个producer上, 就比较难办
+
+解决:
+(1) nginx代理, 打到单个producer上, producer也得是单线程发送(就这么做吧, 简单)
+
+(2) 打到单个producer上, ''如果有多组有序的消息'', 可以开多线程producer, 每个线程前面接一个内存队列, 消息根据id取模进入jvm内存队列,''相当于把有序的消息串行化''
+
+(3) 不打到一台机器, 就得用复杂的分布式锁策略, 很麻烦, 吞吐量也大大降低
+
+[img[kafkayouxu.png]]
+要点:
+
+1. 三个producer抢锁可能耗时很长, 加上mq防止调用超时(用到的是mq[[解耦|00.为什么要使用mq,有什么缺点]]的特性)
+
+2. 无论哪种方案, 有序消息的发送肯定要串行化, 需要借助分布式锁
+
+3. 除了串行化之外, 顺序的问题借助redis的list来解决
+
+> ''有没有可能实现一种带优先级的锁呢?? juc的同步工具???''
+
+! broker
+
+producer的有序消息往同一个partition里发送, 要借助[[producer的负载均衡|01.kafka架构设计]], 利用分区器和key
+
+! consumer
+应该是单线程顺序拉取, 这样最简单
+
+> consumer是按照批次拉取的

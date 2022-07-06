@@ -1,0 +1,130 @@
+created: 20220629033813894
+creator: TidGiUser
+modified: 20220701065108718
+modifier: TidGiUser
+tags: rocketmq fx undo
+title: 10.rocketmq架构设计
+type: text/vnd.tiddlywiki
+
+! 角色(业务架构)
+> 业务架构, 注重业务角色, 屏蔽底层存储、分布式细节
+
+[img[截屏2022-06-29 12.46.32.png]]
+
+!! Producer
+
+* 支持分布式集群方式部署。
+* 随机选择nameserver中的一个节点建立长连接, 拉取topic路由信息(包括topic下面有哪些queue, queue分布在哪些broker上), 
+	**''一般是发送第一条消息时才会根据topic获取路由信息''
+	** 每隔30s会定时拉取broker的信息
+
+* Producer通过MQ的负载均衡模块选择相应的Broker集群队列进行消息投递，投递的过程支持快速失败并且低延迟。
+** producer会和目标的''broker的master''节点建立长连接(只有master可以生产), 定时向master发送心跳
+* 生产者容错: 生产者或消费者可能由于:30s的拉取延时;或者nameserver中的消息本身过时, 导致路由表过时, 解决办法:
+** 重试机制
+** 本地缓存,namesrv挂了也能留有路由信息
+
+!! Consumer
+
+* 支持分布式集群方式部署。
+* 支持以push推，pull拉两种模式对消息进行消费。
+* 同时也支持集群方式和广播方式的消费，它提供实时消息订阅机制，可以满足大多数用户的需求。
+* 和producer类似, 随机选择nameserver中的一个节点建立长连接, 拉取topic路由信息,每隔30s拉取
+** 消费者订阅的topic一般是固定的,所以在启动时就会拉取
+* ''broker的master和slave都能消费'', 因此会和master和slave都建立长连接
+
+!! NameServer
+
+NameServer是一个非常简单的Topic路由注册中心，其角色类似Dubbo中的zookeeper，支持Broker的动态注册与发现。
+
+1. 集群架构:
+
+NameServer通常也是集群的方式部署，各实例间相互不进行信息通讯。
+
+''Broker是向每一台NameServer注册自己的路由信息''，所以每一个NameServer实例上面都保存一份完整的路由信息。
+
+当某个NameServer因某种原因下线了，Broker仍然可以向其它NameServer同步其路由信息， Producer,Consumer仍然可以动态感知Broker的路由的信息。
+
+
+2. Broker的动态注册与发现,可以细分为两个功能: 
+
+Broker管理:NameServer接受Broker集群的注册信息并且保存下来作为路由信息的基本数据。''broker启动的时候就会向每个namesrv注册'',然后提供心跳检测机制，检查Broker是否还存活;
+
+''30s心跳机制和120秒的故障感知机制: broker与所有namesrv节点建立长连接,每隔30s发心跳.nameserver每隔10s扫描broker列表, 如果某个broker的心跳包最新时间戳距离现在超过120s,则剔除''
+
+路由信息管理:每个NameServer将保存关于Broker集群的整个路由信息和用于客户端查询的队列信息。然后Producer和Conumser每隔30s拉取,通过NameServer就可以知道整个Broker集群的路由信息，从而进行消息的投递和消费。 
+
+
+!! BrokerServer
+
+Broker主要负责:
+
+# 消息的存储、投递和查询
+# 服务高可用保证，
+
+为了实现这些功能，Broker包含了以下几个重要子模块。
+
+# Remoting Module:整个Broker的实体，负责处理来自clients端的请求。
+# Client Manager:负责管理客户端(Producer/Consumer)和维护Consumer的Topic订阅信息
+# Store Service:提供方便简单的API接口处理消息存储到物理硬盘和查询功能。
+# HA Service:高可用服务，提供Master Broker 和 Slave Broker之间的数据同步功能。
+# Index Service:根据特定的Message key对投递到Broker的消息进行索引服务，以提供消息的快速查询。
+
+! 分布式存储架构(和[[kafka|01.kafka架构设计]]对比)
+
+<<<
+x轴: 副本(partition的副本) ,关注两方面:
+
+高可用, 数据可靠
+
+* 不做读写分离, 规避数据一致性问题
+* 写成功时机,ack(数据可靠性和性能的tradeoff)
+* 关注kafka落盘时的性能(单机持久化)
+* 高可用:leader(主partition)选举机制(谁负责??zk还是controller???)
+
+y轴: 业务划分, topic(逻辑概念)
+
+* 业务之间隔离, 某个业务升级不影响其他业务
+* 不同topic可以部署到不同节点
+
+z轴: partition(物理概念)
+
+* 单个业务量大, 提高吞吐(1个partition对应的consumer不能增多)
+* 关键点:有序性问题, 找到无关的可以分散开, 有关的保证顺序(对分片算法有要求,见下方的producer负载均衡架构)
+<<<
+
+x轴: 副本(broker层面,分master和slave,为什么是broker层面??):
+
+> RocketMQ：''Broker是个逻辑概念''，1个broker = 1个master + 多个slave。所以才有master broker, slave broker这样的概念。那这里，master和slave是如何配对的呢？ 答案是通过broker name。具有同1个broker name的master和slave进行配对。
+* slave可读
+* 写成功时机: 同步复制和异步复制
+* 落盘性能: 同步刷盘和异步刷盘
+* ''master挂了怎么办??是转移到其他master, 还是HA机制将slave选为master??''
+
+y轴: 业务划分:topic
+
+z轴: queue(== partition??)
+
+kafka:对于partition的描述只有topicName和partitionId两个维度(''topic-数字''),并没有broker这个维度, 它可以分配到任何的broker上(创建topic的时候指定分区数和副本数, kafka会自动往broker集群上分配)
+
+rocketmq:queue要用topic, broker, queueId三个维度来描述, ''一个broker上的queue不可能属于另一个broker,因此一旦某个broker挂了, 代码就会抱broker找不到, 而不是自动转移到另一个broker''
+
+rocketmq创建topic有两种模式:集群模式-c和broker模式-b, 前者针对整个集群,也就是每个broker上queue数量相同;后者针对broker,每个broker上的queue数量可以不通(注意,topic仍然是针对集群的)
+
+然后指定读写队列数量
+
+[img[rockerchuangjiangtopoc.png]]
+
+总结:
+
+1. kafka和rocketmq的topic都是跨越整个集群的概念
+
+2. rocketmq的queue, 可以看作kafka配置了broker数量的partition,但是partition内部又细分了queue
+
+3. rocketmq queue的副本交给了每个broker的slave, kafka 的broker不分主从
+
+> 这张图片可以看做三个主,没有从
+[img[截屏2022-07-01 14.41.58.png]]
+
+''其他区别, 也需要在高可用, 故障恢复的机制中看出来''
+! 生产者消费者轮询机制???

@@ -1,0 +1,17 @@
+created: 20220701070608459
+creator: TidGiUser
+modified: 20220701072123643
+modifier: TidGiUser
+tags: rocketmq fx undo
+title: 21.rocketmq使用-顺序消息
+type: text/vnd.tiddlywiki
+
+对标:[[02.kafka消息有序性]]
+
+顺序消息, producer必须用同步发送吗???意思说会重试???
+
+kafka有partition只能对应group内一个消费者的要求,rocket有吗???
+
+rocket的广播消息???
+
+rocket push和pull的区别??? 是不是rocket比kafka更灵活???

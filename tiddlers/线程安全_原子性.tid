@@ -1,0 +1,22 @@
+created: 20220531053639917
+creator: TidGiUser
+difficulty: 6.1000000000000005
+due: 20220611004017428
+grade: 0
+history: [{"due":"20220610080756779","interval":0,"difficulty":5,"stability":2,"retrievability":1,"grade":-1,"lapses":0,"reps":1,"review":"20220608080756778"}]
+interval: 2
+lapses: 1
+modified: 20220624024857663
+modifier: TidGiUser
+reps: 1
+retrievability: 0.9
+review: 20220610004017427
+stability: 1.4816364413634358
+tags: 多线程 01.多线程缺点 $:/tags/Commander/Working fx ?
+title: 线程安全:原子性
+tmap.id: cd2101db-5d0f-4319-b22f-f6ab0bac6ca4
+type: text/vnd.tiddlywiki
+
+! 定义
+
+原子性定义：一个逻辑上整体的操作可以被中途打断（原子性)(''实际的原子性往往是一个相对的概念，一段原子性的代码并不意味着不会被cpu打断了''，一般表现为：访问同一个状态的A，B线程，A线程必须在B线程完成了某段原子性操作之后才能继续执行，B相对于A是原子的。

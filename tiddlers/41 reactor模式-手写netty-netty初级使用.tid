@@ -1,0 +1,247 @@
+created: 20220607084207333
+creator: TidGiUser
+difficulty: 5.1000000000000005
+due: 20220616014206529
+grade: 1
+history: [{"due":"20220610080907700","interval":0,"difficulty":5,"stability":2,"retrievability":1,"grade":-1,"lapses":0,"reps":1,"review":"20220608080907700"}]
+interval: 2
+lapses: 0
+modified: 20220610014206529
+modifier: TidGiUser
+reps: 2
+retrievability: 0.9
+review: 20220610014206528
+stability: 5.512139752431654
+tags: IO fx ?
+title: 41 reactor模式-手写netty-netty初级使用
+type: text/vnd.tiddlywiki
+
+! epoll到reactor模式的过度
+这里应该和[[40.Reactor反应器模式]]联系起来，主要是msb的笔记。
+
+[img[截屏2022-06-07 16.50.40.png]]
+对上图的一个解释：
+
+netty的NioEventLoop，本质上就是将所有的连接（FD）分组，每组注册到一个selector上，由一个线程去处理。这样在单个线程内epoll_wait→accept→读→写是顺序调用的（reactor和多个fd的handler是串行执行的）
+
+最好的线程数量是：cpu cpu*2
+
+再进一步：拿出一些线程的selector就只关注accept（boss线程，只注册serversocket），然后把接收的客户端的fd，分配给其他线程的selector（worker线程）。避免高并发情况下，accept由于某个读写任务阻塞了，导致有些客户端就是连不进来，整体的用户体验是不好的。
+
+并且，所有boss线程，worker线程分别封装到Boss Group和Woker Group，由group自己去管理线程，自己决定fd注册到哪个selector上。用户角度就针对boss group直接bind就好了，至于到底哪个boss线程监听，应该是group自己的事情。同理，boss只针对worker group注册客户端就好了，group自己管理到底注册到哪个worker线程上。
+
+! 手写netty（多线程reactor）代码解析
+见项目sysio，包testreactor，其实就是一个多线程reactor模式的实现
+
+主要是两个类：
+
+1. SelectorThread，类似于一个NioEventLoop。核心属性就是selector，动作就是eventloop的三个步骤：
+
+（1）select：阻塞式查询IO事件
+
+（2）processSelectedKeys：处理IO事件，可能是处理客户端接入，这种将channel交给workergroup，也可能是读取，这种交给handler去做
+
+（3）runAllTasks: 在NioEventLoop运转的过程中，随时有可能往selector上注册新的channel，而select()在阻塞的阶段是感知不到新注册的channel的，必须调用wakeup()唤醒。''但是你不能确保nioeventloop线程唤醒之后到下次阻塞之前，主线程就能把channel注册上去，为了完成这里的协调，主线程只把channel放入一个队列，由eventloop自己在runAllTasks阶段取出channel，完成注册''
+
+2. SelectorThreadGroup，类似于NioEventLoopGroup。把NioEventLoop线程隐藏起来。用户就可以直接面向group完成地址的绑定，新的channel也直接扔给group，group自己去轮询eventLoop，完成注册。
+
+在netty中，用户直接使用的是bootstrap，它负责组装起eventLoopgroup，channel还有handler。
+
+! netty初级使用的解析
+要点：
+
+netty就是一个基于reactor模式,把多路复用IO模型进行了封装，用户把主要精力放在handler的编写上就好了。
+
+> 前面reactor模型中提到的handler和这里用户自定义的handler略有不同，reactor中的handler需要负责事件查询后的操作，读事件肯定先做的就是read()，这一步比较固定因此并不需要让用户自行编写（''开闭原则''），在netty中作为基类handler编入框架了，用户只需要继承基类handler完成后续业务的编写。
+
+读是被动的,读操作是事件驱动的，适合用事件处理机制,读事件发生后用handler处理
+
+写是主动的,并非是事件驱动的，所以适合主动调用,虽然内部依然用的是eventLoop，即用户把写好的数据准备到bytebuffer中，并且设置selector关心写事件，然后eventloop才会去查询写事件，然后发送。
+
+---
+bootstrap handler的一些编写细节：
+
+客户端
+
+```java
+    @Test
+    public void nettyClient() throws Exception {
+        //类似于一个线程池
+        NioEventLoopGroup group = new NioEventLoopGroup();
+        Bootstrap bs = new Bootstrap();
+        ChannelFuture connect = bs.group(group)
+                .channel(NioSocketChannel.class)
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    protected void initChannel(NioSocketChannel socketChannel) throws Exception {
+                        ChannelPipeline p = socketChannel.pipeline();
+                        p.addLast(new MyInHandler());
+                    }
+                }).connect(new InetSocketAddress("127.0.0.1", 9090));
+
+        //接收是完全被动的,在回调(handler)中处理就好了
+        //写入是主动的,因此一定有主动写入的操作,当然从主线程的角度来看是异步的,是交给eventloop去做的
+        //连接服务器操作,与写入操作同理,也是异步的,所以调用.connect相当于只是让selector去关心写事件,告诉它准备练哪个地址
+
+        //连接成功了,用户一定需要一个端点去完成写入操作,需要等待异步的连接完成之后
+        Channel client = connect.sync().channel();
+
+        //发送 等待发送成功
+        ByteBuf byteBuf = Unpooled.copiedBuffer("hello netty".getBytes());
+        ChannelFuture send = client.writeAndFlush(byteBuf);
+        send.sync();
+
+        client.closeFuture().sync();
+    }
+```
+
+这里.handler方法相当于就是往channel的入站或出战方向挂一系列的handler
+
+这里MyInhandler的实现
+
+```java
+/*
+你不应该
+ */
+//@ChannelHandler.Sharable
+class MyInHandler extends ChannelInboundHandlerAdapter {
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client registered");
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("client active");
+
+    }
+
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        ByteBuf buf = (ByteBuf) msg;//已经写入ByteBuf了,不用调用client.write(bytebuffer)??这个以后要跟源码看看
+
+        //会移动readIndex
+        //CharSequence str = buf.readCharSequence(0,buf.readableBytes(), CharsetUtil.UTF_8);
+
+        CharSequence str = buf.getCharSequence(0,buf.readableBytes(), CharsetUtil.UTF_8);
+        //直接写回,也是读bytebuf,所以如果前面移动了readIndex,这里就读不到了
+        //这里有点疑惑的是,读的时候直接就进bytebuf了,写的时候还得像下面这样调用,
+        //因为读事件来了就可以读了,但写是主动调的,不是响应式的,读操作看上去就是彻底异步了
+        ctx.writeAndFlush(buf);
+    }
+}
+
+```
+
+服务端其实略有不同：
+
+```java
+    @Test
+    public void nettyServer() throws InterruptedException {
+        NioEventLoopGroup group = new NioEventLoopGroup(1);
+        ServerBootstrap bs = new ServerBootstrap();
+        ChannelFuture bind = bs.group(group, group)
+                .channel(NioServerSocketChannel.class)
+                .childHandler(new ChannelInitializer<NioServerSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioServerSocketChannel socketChannel) throws Exception {
+                        ChannelPipeline p = socketChannel.pipeline();
+                        p.addLast(new MyInHandler());
+                    }
+                })  //注意这里不用调用.handler  MyAcceptHandler逻辑固定(接收客户端之后注册,添加handler),已经内部实现了
+                .bind(new InetSocketAddress("127.0.0.1", 9090));
+
+        bind.sync().channel().closeFuture().sync();
+    }
+```
+这里调用的是childHandler,往socketChannel上挂handler。其实是省略了NioSocketChannel的处理，因为它的事件响应很简单，就是把接收的channel注册到selector上，所以框架帮你写好了。
+
+梳理一下这里的问题：
+
+1. 为什么调用childHandler
+
+先往NioSocketChannel上挂一个MyAccepthandler，然后在回调中再往收到的channel上挂MyInhandler
+
+框架自己帮你把MyAccepthandler写好了，你只需要实现MyInhandler（大概就是调用childHandler的原因）
+
+2. 为什么传的handler是ChannelInitializer，而不是直接写用户自定义的handler
+
+但这又有一个问题，如果你只是传给框架一个MyInhandler对象，那么每次有channel接入，用的都是这个MyInhandler单例，多个连接共用这单例，不方便往里面加属性了。
+
+一个解决思路是：你可以用反射，传给框架类模版，让框架自己用反射创建。
+
+另一个思路：给框架传函数，函数式编程？？响应式编程？？
+
+方法：在MyAccepthandler和MyInhandler之间再套一个handler（ChannelInit），在其channelRegistered回调中完成注册。
+
+''这样来看，netty中的ChannelInitializer大概就是这里的ChannelInit，它就是一个套''
+
+```java
+    /**
+     * 服务端
+     */
+    @Test
+    public void serverMode() throws InterruptedException {
+        NioEventLoopGroup thread = new NioEventLoopGroup(1);
+        NioServerSocketChannel server = new NioServerSocketChannel();
+        thread.register(server);
+        //指不定什么时候家里来人...
+        ChannelPipeline p = server.pipeline();
+        p.addLast(new MyAcceptHandler(thread, new ChannelInit()));
+        ChannelFuture bind = server.bind(new InetSocketAddress("127.0.0.1", 9090));
+        bind.sync().channel().closeFuture().sync();
+        System.out.println("server close");
+    }
+  
+//AcceptHandler其实之后也不用写(读写数据的handler还是要自己实现的), 是bootstrap内部私有的类
+class MyAcceptHandler extends ChannelInboundHandlerAdapter {
+    private final ChannelHandler handler;
+    private final EventLoopGroup selector;
+    public MyAcceptHandler(EventLoopGroup thread, ChannelHandler myInHandler) {
+        this.selector = thread;
+        this.handler = myInHandler;
+    }
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        System.out.println("server registered");
+    }
+    @Override
+    public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+        //这个时候接入连接 读到的是个啥
+        SocketChannel client = (SocketChannel) msg;
+        //后面肯定还要做注册,然后往pipeline里面装handler
+        //1. 注册
+//        selector.register(client);
+        //2. 响应式的 handler
+        //都不是线性的,就是把未来可能发生的事情埋好
+//        ChannelPipeline p = client.pipeline();
+//        p.addLast(handler);
+        //如果接入多个客户端，这里会报错, 同一个MyInHandler对象无法共享,相当于单例了
+        //倘若设计handler的人在class里加了很多属性,那么多个client连接共享这个handler就不太对了
+        //解决:1. 加注解,你不应该让用户放弃加属性的操作
+        //2. 每次new handler,但是MyAcceptHandler不是用户自己实现的,要从外界传。想到了反射,但也不太好
+        //3. 准备一个套,设计一个没有业务功能的handler
+        //思路:接入client之后,pipeline中加入channelInit,然后在注册事件中加逻辑
+        //相当于又做成响应式的了,除了反射之外,响应式也是一种往框架里填代码的好方式
+        //原来是直接在管道里加MyInHandler,现在是过了一遍手,现在管道里加ChannelInit
+        //先把ChannelInit放进去, 然后再注册
+        ChannelPipeline p = client.pipeline();
+        p.addLast(handler);
+        selector.register(client); //这部执行了之后,就会触发ChannelInit的channelRegistered方法
+    }
+}
+//这里可以加注解,它没有啥业务功能
+//所以,它可以是单例的
+@ChannelHandler.Sharable
+class ChannelInit extends ChannelInboundHandlerAdapter {
+    @Override
+    public void channelRegistered(ChannelHandlerContext ctx) throws Exception {
+        Channel client = ctx.channel();
+        ChannelPipeline p= client.pipeline();
+        p.addLast(new MyInHandler());
+        ctx.pipeline().remove(this); //过河拆桥，之后还存在已经没有意义了
+    }
+    //这么写不优美, 源码的写法是abstarct class 模板方法模式
+    //未来你需要实现的是ChannelInitilaizer中的initChannel方法
+}
+```
+

@@ -1,0 +1,26 @@
+created: 20220526150927909
+creator: TidGiUser
+difficulty: 5.1000000000000005
+due: 20220616003837611
+grade: 1
+history: [{"due":"20220610080742009","interval":0,"difficulty":5,"stability":2,"retrievability":1,"grade":-1,"lapses":0,"reps":1,"review":"20220608080742009"}]
+interval: 2
+lapses: 0
+modified: 20220610003837611
+modifier: TidGiUser
+reps: 2
+retrievability: 0.9
+review: 20220610003837610
+stability: 5.512139752431654
+tags: 多线程基础知识 $:/tags/Commander/Working fx ?
+title: 00.为什么要有多线程(优点)
+tmap.id: 217dafda-fecc-499a-a4a0-195d5a844896
+type: text/vnd.tiddlywiki
+
+
+# 充分利用多cpu
+# 程序编写更简单？？<div>
+想象一下，尤其在GUI程序中，没有多线程，你的web类项目将很难编写，框架不会为你的controller方法自动开一个线程执行。
+</div>
+# 异步事件简化处理，IO操作不会阻塞其他请求的执行
+# 响应更灵敏的用户界面

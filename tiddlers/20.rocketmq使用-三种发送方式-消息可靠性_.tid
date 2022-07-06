@@ -1,0 +1,17 @@
+created: 20220701031940946
+creator: TidGiUser
+modified: 20220701071618372
+modifier: TidGiUser
+tags: rocketmq fx undo
+title: 20.rocketmq使用-三种发送方式-消息可靠性?
+type: text/vnd.tiddlywiki
+
+生产者三种发送方式
+
+发送有重试吗???
+
+broker主从同步机制
+
+setWaitStoreMsgOK
+
+[img[截屏2022-07-01 15.01.46.png]]

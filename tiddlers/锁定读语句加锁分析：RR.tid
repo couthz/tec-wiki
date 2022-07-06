@@ -1,0 +1,29 @@
+created: 20220615122040015
+creator: TidGiUser
+difficulty: 5
+due: 20220623111740895
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111740896
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111740895
+stability: 2
+tags: 04.mysql是怎么加锁的？？ fx ?
+title: 锁定读语句加锁分析：RR
+type: text/vnd.tiddlywiki
+
+主要注意和RU，RC不同的地方
+
+! 使用主键进行等值查询
+1. SELECT * FROM hero WHERE number = 7 LOCK IN SHARE MODE;
+
+如果number=7的记录存在，由于唯一性约束，并不会有新的number=8的记录插入，因此给该记录加一个s锁就好
+
+如果number=7的记录不存在，''如图就需要number=8的记录上插入gap锁，表示（3，8）之间不能插入记录''
+
+[img[截屏2022-06-15 20.26.09.png]]
+>这就出现问题了，4，5，6也不能插入了？？？

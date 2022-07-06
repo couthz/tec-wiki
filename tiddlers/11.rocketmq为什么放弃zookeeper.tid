@@ -1,0 +1,30 @@
+created: 20220629055727712
+creator: TidGiUser
+modified: 20220629060242760
+modifier: TidGiUser
+tags: rocketmq
+title: 11.rocketmq为什么放弃zookeeper
+type: text/vnd.tiddlywiki
+
+
+1. 尼恩课上的原因
+
+不用选主功能:
+
+ZooKeeper可以提供Master选举功能，比如Kafka用来给每个分区选一个broker作为leader，但对于 RocketMQ来说，topic的数据在每个Master上是对等的，Master上有topic上的全部数据，所以这里选举leader没有意义;
+
+RockeqMQ集群中，需要有构件来处理一些通用数据，比如broker列表，broker刷新时间，虽然 ZooKeeper也能存放数据，并有一致性保证，但处理数据之间的一些逻辑关系却比较麻烦，而且数据的 逻辑解析操作得交给ZooKeeper客户端来做，如果有多种角色的客户端存在，自己解析多级数据确实是个麻烦事情;
+
+''既然RocketMQ集群中没有用到ZooKeeper的一些重量级的功能，只是使用ZooKeeper的数据一致性和 发布订阅的话，与其依赖重量级的ZooKeeper，还不如写个轻量级的NameServer，NameServer也可 以集群部署''，
+
+2. 注重可用性而非一致性
+
+注册中心自身为了保脑裂(P)下的数据一致性（C）而放弃了可用性，导致了同机房的服务之间出现了无法调用，这是绝对不允许的！可以说在实践中，注册中心不能因为自身的任何原因破坏服务之间本身的可连通性，这是注册中心设计应该遵循的铁律！
+
+''zk在脑裂情况下，少数势力会下线。但是对应区域的多个服务之间本身是可以互相调用的，现在反而因为注册中心导致应用服务 svcB 不可以重新部署，重新启动，扩容或者缩容''
+
+namesrv如果脑裂了, 也不会下线, 本身就是无状态服务
+
+> 当然，客户端中应该有针对注册中心服务完全不可用时做容灾的手段，例如设计客户端缓存数据机制（我们称之为 client snapshot）就是行之有效的手段。另外，注册中心的 health check 机制也要仔细设计以便在这种情况不会出现诸如推空等情况的出现
+
+[img[放弃zk用namesrv.png]]

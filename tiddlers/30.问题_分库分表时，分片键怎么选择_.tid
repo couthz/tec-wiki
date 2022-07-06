@@ -1,0 +1,11 @@
+created: 20220704105009895
+creator: TidGiUser
+modified: 20220704111050792
+modifier: TidGiUser
+tags: 分库分表 fx undo
+title: 30.问题:分库分表时，分片键怎么选择?
+type: text/vnd.tiddlywiki
+
+''对错第二, 系统化第一''
+
+[img[截屏2022-07-04 18.52.31.png]]

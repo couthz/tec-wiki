@@ -1,0 +1,118 @@
+created: 20220614101357424
+creator: TidGiUser
+difficulty: 5
+due: 20220623111724254
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220706083950037
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111724254
+stability: 2
+tags: mysql事务(主要基于inoodb的原理) fx ?
+title: 02.mvcc
+type: text/vnd.tiddlywiki
+
+! 定义
+1. MVCC指的就是在使用`READ COMMITTD`、`REPEATABLE READ`这两种隔离级别的事务在执行''普通的`SELECT`操作''时访问记录的版本链的过程，这样子可以使不同事务的`读-写`、`写-读`操作并发执行，从而提升系统性能。
+
+2. `READ COMMITTD`、`REPEATABLE READ`这两个隔离级别的一个很大不同就是：''生成ReadView的时机不同''，READ COMMITTD在每一次进行普通SELECT操作前都会生成一个ReadView，而REPEATABLE READ只在第一次进行普通SELECT操作前生成一个ReadView，之后的查询操作都重复使用这个ReadView就好了。
+
+! 版本链
+
+''版本链就是一条记录由undo log串接起来的版本从新到旧的链表
+''
+
+innodb引擎，聚簇索引记录中有两个隐藏列：
+
+trx_id：事务id，插入，更新或者''删除''（只是在新记录上加上了delete mark）这条记录，会记录该事务的id''（select不会记录）''
+
+roll_pointer: 回滚指针，串起了版本链，每次更新，都会把旧值放入[[undo日志|03.undo log]],串在版本链上
+
+>undo log中应该有的：旧的数据，关联的事务id，下一个版本操作的反向操作，roll_pointer
+[img[截屏2022-06-14 18.41.35.png]]
+
+>版本链肯定也不能无限增长，随着系统的运行，在确定系统中包含最早产生的那个ReadView的事务不会再访问某些update undo日志以及被打了删除标记的记录后，有一个后台运行的purge线程会把它们真正的删除掉
+
+! ReadView
+事务可以利用生成的ReadView，来判断记录中哪个版本的数据是本事务当前可见的。''可以理解为生成ReadView，就是生成了一个所有数据的快照，读的时候只能去读快照。''
+
+ReadView组成：
+
+`m_ids`：表示在生成`ReadView`时当前系统中活跃的读写事务的`事务id`列表。
+
+`min_trx_id`：表示在生成`ReadView`时当前系统中活跃的读写事务中最小的`事务id`，也就是`m_ids`中的最小值。
+
+`max_trx_id`：表示生成`ReadView`时系统中应该分配给下一个事务的`id`值。
+
+>小贴士： 注意max_trx_id并不是m_ids中的最大值，事务id是递增分配的。比方说现在有id为1，2，3这三个事务，之后id为3的事务提交了。那么一个新的读事务在生成ReadView时，m_ids就包括1和2，min_trx_id的值就是1，max_trx_id的值就是4。
+
+`creator_trx_id`：表示生成该`ReadView`的事务的`事务id`。
+
+>小贴士： 我们前边说过，只有在对表中的记录做改动时（执行INSERT、DELETE、UPDATE这些语句时）才会为事务分配事务id，否则在一个只读事务中的事务id值都默认为0。
+
+比如：当前有事务2，3，4，5，6其中：
+
+''生成readview时''活跃事务2，4，5生成readview的事务是4，那么：
+
+m_ids:[2,4,5]
+
+min_trx_id:2
+
+max_trx_id:6
+
+creator_trx_id:4
+
+有了这个ReadView，这样在访问某条记录时，只需要按照下边的步骤判断记录的某个版本是否可见：
+
+> ''注意事务执行过程中，读操作会分配trx_id = 0, 只有在第一次真正修改记录时（比如使用INSERT、DELETE、UPDATE语句），才会被分配一个单独的递增事务id，这个事务id是递增的。如果先读再写,会分配两次trx_id''
+
+1. 如果记录的trx_id = creator_trx_id，可见，自己肯定可见
+
+2. 如果记录的trx_id < min_trx_id,说明生成readView时trx_id的事务已经提交,该版本数据可以访问
+
+3. 如果记录的trx_id >= max_trx_id,说明该事务在生成readView之后才开启,不能访问
+
+4. 如果min_trx_id <= trx_id < max_trx_id,那么就要判断trx_id是否在m_ids内,如果不在说明生成readview时事务已经提交了,可以访问,反之不能
+
+那就顺着版本链找到下一个版本的数据，继续按照上边的步骤判断可见性，依此类推，直到版本链中的最后一个版本。
+
+如果最后一个版本也不可见的话，那么就意味着该条记录对该事务完全不可见，查询结果就不包含该记录。
+
+总结起来就是拿着readview去看记录的trx_id:
+
+如果 < min_trx_id，可见
+
+如果>= max_trx_id,不可见
+
+其余的，只要不在m_ids内，就可见
+
+不然就去找旧数据
+
+''核心思想：生成readview时没提交的数据不可见，生成readview相当于生成一份已提交数据的快照''  
+
+! 不同[[隔离级别|01.事务隔离级别]]是如何使用mvcc的
+RU：直接去读buffer pool，不管版本
+
+RC：一个事务在执行过程中每次执行SELECT操作时都会生成一个ReadView，ReadView的存在本身就保证了事务不可以读取到未提交的事务所做的更改，也就是避免了脏读现象。''（每次select都生成快照）''
+
+RR：REPEATABLE READ隔离级别下，一个事务在执行过程中只有第一次执行SELECT操作才会生成一个ReadView，之后的SELECT操作都复用这个ReadView，这样也就避免了不可重复读的问题。''（第一次select就生成快照）''
+
+> 幻读问题的产生是因为某个事务读了一个范围的记录，之后别的事务在该范围内插入了新记录，该事务再次读取该范围的记录时，可以读到新插入的记录，所以幻读问题准确的说并不是因为读取和写入一条相同记录而产生的，这一点要注意一下。
+
+! mvcc不能禁止幻读
+
+> ''mvcc不能禁止幻读的例子：''
+> T1范围查询age=30的学生，没查到 -> T2插入age为30的学生amy -> T1修改amy的学号，此时amy的trxid变为t1的trxid -> T1范围查询age=30的学生，能查到了，因为记录的trx_id = creator_trx_id
+
+> 究其原因：虽然RR下select一开始就生成了readview，相当于一个静态的快照，但是有一点需要注意：''事务是能读到自己修改的数据的！！，这就引出了mvcc可能导致的异常：''
+> RR级别下，一个事务A更新了一个表中某一行a的数据，同时其他事务B更新了表中其他数据，A可以读到a的最新版数据，但只能得到其他改动行的旧版数据，''相当于A这时看到的表的数据其实并不一致，是真实情况下不存在的。''
+
+''因此得出结论，在RR级别，同一个事务一直执行普通的select查询不会出现幻读，但如果中间执行update，有可能出现幻读''
+
+
+
+

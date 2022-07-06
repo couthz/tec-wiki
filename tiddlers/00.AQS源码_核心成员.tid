@@ -1,0 +1,148 @@
+created: 20220620090300008
+creator: TidGiUser
+difficulty: 5
+due: 20220623111914640
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111914640
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111914640
+stability: 2
+tags: AQS fx ?
+title: 00.AQS源码:核心成员
+type: text/vnd.tiddlywiki
+
+! AQS的核心成员变量
+
+AQS 出于变与不变分离的原则，AQS 基于[[模板模式|模版方法模式]]实现。
+
+AQS 为锁获取、锁释放的排队、出队过程提供了一系列的模板方法;
+
+由于JUC的显式锁种类丰富，所以AQS将不同锁的具体操作抽取为钩子方法，供各种锁的子类(或则其内部类)去实现。
+
+!! 状态标志位state
+
+AQS 中维持了一个单一的 [[volatile|volatile]] 修饰的状态信息 state，AQS使用int类型的state标示锁的状态，可以理解为锁的同步状态。
+
+```java
+//同步状态，使用 volatile 保证线程可见,state 因为用 volatile 因此保证了我们操作的可见性，所以任何线程通过 getState()获得状态都 是可以得到最新值。
+private volatile int state;
+//AQS 提供了 getState( )、setState( )来获取和设置同步状态，具体如下:
+// 获取同步的状态
+protected final int getState() {
+    return state;
+}
+// 设置同步的状态
+protected final void setState(int newState) {
+    state = newState;
+}
+// 通过 CAS 设置同步的状态
+protected final boolean compareAndSetState(int expect, int update) {
+       return unsafe.compareAndSwapInt(this, stateOffset, expect, update);
+}
+```
+由于 setState()无法保证原子性，因此 AQS 给我们提供了 compareAndSetState 方法利用底层 UnSafe 的 CAS 机制来实现原子性。compareAndSetState()函数实际上调用的是 unsafe 成员的 compareAndSwapInt 方法。
+
+> 以 ReentrantLock 为例，''state 初始化为 0，表示未锁定状态''。A 线程 lock()时，会调用 tryAcquire() 独占该锁并将 state+1。此后，其他线程再 tryAcquire()时就会失败，直到 A 线程 unlock()到 state=0 (即释放锁)为止，其它线程才有机会获取该锁。当然，释放锁之前，A 线程自己是可以重复获 取此锁的(state 会累加)，这就是可重入的概念。但要注意，获取多少次就要释放多么次，这样 才能保证 state 是能回到零态的。
+
+AbstractQueuedSynchronizer 继承了 AbstractOwnableSynchronizer，''这个基类只有一个变量叫 exclusiveOwnerThread，表示当前占用该锁的线程''，并且提供了相应的 get/set 方法
+
+!! Node定义
+```java
+static final class Node {
+	/**节点等待状态值 1:取消状态*/ 
+	static final int CANCELLED = 1;
+	/**节点等待状态值-1:标识后继线程处于等待状态*/ 
+	static final int SIGNAL = -1;
+	/**节点等待状态值-2:标识当前线程正在进行条件等待*/ 
+	static final int CONDITION = -2;
+	/**节点等待状态值-3:标识下一次共享锁的 acquireShared 操作需要无条件传播*/ 
+	static final int PROPAGATE = -3;
+	//节点状态:值为 SIGNAL、CANCELLED、CONDITION、PROPAGATE、0 //普通的同步节点的初始值为 0，条件等待节点的初始值为 CONDITION (-2) 
+	volatile int waitStatus;
+	//节点所对应的线程，为抢锁线程或者条件等待线程 
+	volatile Thread thread;
+	//前驱节点，当前节点会在前驱节点上自旋，循环检查前驱节点的 	waitStatus 状态 
+	volatile Node prev;
+	//后继节点
+	volatile Node next;
+	
+	//如果当前 Node 不是普通节点而是条件等待节点，则节点处于某个条件的等待队列上 
+	//此属性指向下一个条件等待节点，即其条件队列上的后继节点。
+	Node nextWaiter;
+        ...
+}
+```
+1.waitStatus 属性:
+
+每个 Node 节点与等待线程关联，每个节点维护一个状态 waitStatus，waitStatus 的各种值以常量的形式进行定义。waitStatus 的各常量值，具体如下:
+
+(1)static final int CANCELLED = 1
+
+waitStatus值为1时表示该线程节点已释放(超时、中断)，已取消的节点不会再阻塞。表示线程因为中断或者等待超时，需要从等待队列中取消等待;
+
+由于该节点线程等待超时或者被中断，需要从同步队列中取消等待，则该线程被置1。节点进入了取消状态，该类型节点不会参与竞争，且会一直保持取消状态。
+
+(2)static final int SIGNAL = -1
+
+waitStatus为SIGNAL(-1)时表示其后继的节点处于等待状态，当前节点对应的线程如果释放了同步状态或者被取消，将会通知后继节点，使后继节点的线程得以运行。
+
+> 通知??而不是后继节点自旋??
+
+(3)static final int CONDITION =-2;
+
+waitStatus为-2 时，表示该线程在条件队列(Condition queues)中阻塞(Condition有使用)， 表示结点在等待队列中(这里指的是等待在某个 lock的condition上)，当持有锁的线程调用了Condition的 signal()方法之后，结点会从该condition的等待队列转移到该 lock 的同步队列上，去竞争lock。(''注意:这里的同步队列就是我们说的 AQS 维护的FIFO队列，等待队列则是每个condition关联的队列'')
+
+节点处于等待队列中，节点线程等待在Condition上，当其他线程对 Condition调用了signal() 方法后，该节点从等待队列中转移到同步队列中，加入到对同步状态的获取中。
+
+(4)static final int PROPAGATE = -3;
+
+waitStatus为-3时，表示该下一个线程获取共享锁后，自己的共享状态会被无条件的传播下去???，因为共享锁可能出现同时有N个锁可以用，这时候直接让后面的N个节点都来工作。''这种状态在CountDownLatch中有使用到。''
+
+为什么当一个节点的线程获取共享锁后，要唤醒后继共享节点?共享锁是可以多个线程共有的，当一个节点的线程获取共享锁后，必然要通知后继共享节点的线程，也可以获取锁了，这样就不会让其他等待的线程等很久，而传播性的目的也是尽快通知其他等待的线程尽快获取锁。
+
+(5)waiteStatus 为 0
+waitStatus 为 0 时，表示当前节点处于初始状态。
+
+2. thread 成员
+
+Node 的 thread 成员用来存放进入 AQS 队列中的线程引用;Node 的 nextWaiter 成员用来指向自己的后继等待节点，''此成员只有线程处于条件等待队列中的时候使用''。
+
+3. 抢占类型常量标识
+Node 结点还定义了两个抢占类型常量标识:SHARED、EXCLUSIVE，具体如下:
+
+```java
+static final class Node { //标识节点在抢占共享锁
+    static final Node SHARED = new Node(); //标识节点在抢占独占锁
+    static final Node EXCLUSIVE = null; ...
+}
+
+```
+''SHARED 表示线程是因为获取共享资源时阻塞，而被添加到队列中的;EXCLUSIVE 表示线程因为获取独占资源时阻塞，而被添加到队列中的。''
+
+!! FIFO双向同步队列
+
+''AQS 的内部队列是 CLH 队列变种，每当线程通过 AQS 获取锁失败，线程将被封装成一个 Node 节点，通过 CAS 原子操作插入队列尾。当有线程释放锁时，AQS 会尝试让队头的后继节点占用锁。''
+
+AQS 是一个通过内置的 FIFO 双向队列来完成线程的排队工作，内部通过结点 head 和 tail 记 录队首和队尾元素，元素的结点类型为 Node 类型，具体如下:
+
+/*首节点的引用*/
+
+private transient volatile Node head;
+
+/*尾节点的引用*/
+
+private transient volatile Node tail;
+
+''AQS 的首结点和尾节点都是懒加载的''，在需要的时候才真正创建。
+
+''只有在线程竞争失败的情况下，有新线程加入同步队列时，AQS 才创建一个Head结点''。Head结点只能被setHead 方法修改，并且结点的 waitStatus不能为CANCELLED。
+
+''尾节点只在有新线程阻塞时，才被创建???''
+
+[img[截屏2022-06-20 14.51.29.png]]
+

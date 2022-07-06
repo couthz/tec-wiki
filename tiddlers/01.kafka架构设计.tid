@@ -1,0 +1,79 @@
+created: 20220627122341946
+creator: TidGiUser
+modified: 20220629022728936
+modifier: TidGiUser
+tags: kafka fx undo
+title: 01.kafka架构设计
+type: text/vnd.tiddlywiki
+
+! 角色功能梳理
+
+[img[截屏2022-06-27 20.26.51.png]]
+
+1. zookeeper:负责分布式协调, 存放集群元数据, 成员管理, broker节点的注册, 注销以及属性变更,controller选举,其他管理类任务
+
+2. broker: 一个jvm物理进程;controller负责分配哪个partition到哪个broker上
+
+3. producer:
+
+老版本: producer从zk拿meatdata
+
+新版本: 手动给producer设置broker列表，producer由controller得到metadata（broker，topic，partition的信息）而不是从zk，业务如果越来越多，zk本身通信压力都在主节点上，压力会越来越大。不要因为业务需求给ZK集群添加负担，ZK就去做一些致命性的（比如选主）
+
+4. consumer
+
+关键概念: group
+
+(1). 1个partition可以连多个group：不同的业务部门（group概念的必要性，对应不同业务部门）对应不同的group，重复利用数据
+
+(2). 1个partition在1个group中只能连1个consumer，group内可以是1:1，N：1，但不能是1:N，顺序性会出问题
+
+5. admin-api
+
+管理员通过api，通过zk知道controller在哪里，把创建topic等等指令发给controller（还有哪些指令？？类比数据库建表，哪些事情是管理员要做的，哪些事情是controller要做的？？）
+
+! 分布式架构(存储架构)
+
+kafka的broker天然就是分布式的, 利用AKF(结合业务)来理解broker的存储架构
+
+x轴: 副本(partition的副本) ,关注两方面: 
+
+''高可用, 数据可靠''
+
+# 不做读写分离, 规避数据一致性问题
+# 写成功时机,ack(''数据可靠性和性能的tradeoff'')
+# 关注kafka落盘时的性能([[单机持久化|06.kafka单机持久化(单机存储架构)]])
+# 高可用:leader(主partition)选举机制(谁负责??zk还是controller???)
+
+y轴: 业务划分, topic(逻辑概念)
+
+# 业务之间隔离, 某个业务升级不影响其他业务
+
+# 不同topic可以部署到不同节点
+
+z轴: partition(物理概念)
+
+# 单个业务量大, 提高吞吐(''1个partition对应的consumer不能增多'')
+
+# 关键点:有序性问题, 找到无关的可以分散开, 有关的保证顺序(''对分片算法有要求,见下方的producer负载均衡架构'')
+
+! producer的负载均衡架构
+
+Kafka 生产者生产消息时，根据分区器将消息投递到指定的分区中，所以 Kafka 的负载均衡很大程度上
+依赖于分区器。
+
+Kafka 默认的分区器是 Kafka 提供的 DefaultPartitioner。 它的分区策略是根据 Key 值进行分区分配的:
+
+如果 key 不为 null:对 Key 值进行 Hash 计算，从所有分区中根据 Key 的 Hash 值计算出一个分 区号;拥有相同 Key 值的消息被写入同一个分区;
+
+如果 key 为 null:消息将以轮询的方式，在所有可用分区中分别写入消息。
+
+如果不想使用 Kafka 默认的分区器，用户可以实现 Partitioner 接口，自行实现分区方法。
+
+! consumer负载均衡架构
+
+''同一个分区中的数据，只能被一个消费者组中的一个消费者所消费。''
+
+
+
+

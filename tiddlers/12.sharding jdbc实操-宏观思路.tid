@@ -1,0 +1,94 @@
+created: 20220704074549639
+creator: TidGiUser
+modified: 20220704141843183
+modifier: TidGiUser
+tags: 分库分表 fx
+title: 12.sharding jdbc实操-宏观思路
+type: text/vnd.tiddlywiki
+
+项目代码:
+com.crazymaker.springcloud.sharding.ShardingJavaApiTester#buildShardingDataSource
+
+在项目中引入sharding jdbc,无非是替换datasource
+
+```java
+public void buildShardingDataSource() throws SQLException {
+
+        /*宏观步骤:
+         * 1. 数据源集合：dataSourceMap
+         * 2. 分片规则：shardingRuleConfig
+         * 3. 属性：properties
+         *
+         */
+
+        DataSource druidDs1 = buildDruidDataSource(
+                "jdbc:mysql://cdh1:3306/sharding_db1?useUnicode=true&characterEncoding=utf8&allowMultiQueries=true&useSSL=true&serverTimezone=UTC",
+                "root", "123456");
+
+        DataSource druidDs2 = buildDruidDataSource(
+                "jdbc:mysql://cdh1:3306/sharding_db2?useUnicode=true&characterEncoding=utf8&allowMultiQueries=true&useSSL=true&serverTimezone=UTC",
+                "root", "123456");
+        // 配置真实数据源
+        Map<String, DataSource> dataSourceMap = new HashMap<String, DataSource>();
+        // 添加数据源.
+        // 两个数据源ds_0和ds_1
+        //ds0,ds1是代码中使用的逻辑名称
+        dataSourceMap.put("ds0", druidDs1);
+        dataSourceMap.put("ds1", druidDs2);
+
+        /**
+         * 需要构建表规则
+         * 1. 指定逻辑表.
+         * 2. 配置实际节点》
+         * 3. 指定主键字段.
+         * 4. 分库和分表的规则》
+         *
+         */
+        // 配置分片规则
+        ShardingRuleConfiguration shardingRuleConfig = new ShardingRuleConfiguration();
+
+
+        //step2：分片规则
+        TableRuleConfiguration userShardingRuleConfig = userShardingRuleConfig();
+        shardingRuleConfig.getTableRuleConfigs().add(userShardingRuleConfig);
+
+
+        // 多数据源一定要指定默认数据源
+        // 只有一个数据源就不需要
+        shardingRuleConfig.setDefaultDataSourceName("ds0");
+
+        Properties properties = new Properties();
+        //打印sql语句，生产环境关闭
+        properties.setProperty("sql.show", Boolean.TRUE.toString());
+
+        dataSource = ShardingDataSourceFactory.createDataSource(
+                dataSourceMap, shardingRuleConfig, properties);
+
+    }
+```
+
+注:
+
+<<<
+''其实核心就是配置分片规则ShardingRuleConfiguration''，包括多种配置规则：
+
+表规则配置、绑定表配置、广播表配置、默认数据源名称、默认数据库分片策略、默认表分片策略、默认主键生成策略、主从规则配置、加密规则配置；
+
+表规则配置 tableRuleConfigs：也就是上面配置的库分片策略和表分片策略，也是最常用的配置；
+
+绑定表配置 bindingTableGroups：指分⽚规则⼀致的主表和⼦表；绑定表之间的多表关联查询不会出现笛卡尔积关联，关联查询效率将⼤⼤提升；
+
+广播表配置 broadcastTables：所有的分⽚数据源中都存在的表，表结构和表中的数据在每个数据库中均完全⼀致。适⽤于数据量不⼤且需要与海量数据的表进⾏关联查询的场景；
+
+默认数据源名称 defaultDataSourceName：未配置分片的表将通过默认数据源定位；
+
+默认数据库分片策略 defaultDatabaseShardingStrategyConfig：表规则配置可以设置数据库分片策略，如果没有配置可以在这里面配置默认的；
+
+默认表分片策略 defaultTableShardingStrategyConfig：表规则配置可以设置表分片策略，如果没有配置可以在这里面配置默认的；
+
+默认主键生成策略 defaultKeyGeneratorConfig：表规则配置可以设置主键生成策略，如果没有配置可以在这里面配置默认的；内置UUID、SNOWFLAKE生成器；
+
+主从规则配置 masterSlaveRuleConfigs：用来实现读写分离的，可配置一个主表多个从表，读面对多个从库可以配置负载均衡策略；
+
+加密规则配置 encryptRuleConfig：提供了对某些敏感数据进行加密的功能，提供了⼀套完整、安全、透明化、低改造成本的数据加密整合解决⽅案；
+<<<

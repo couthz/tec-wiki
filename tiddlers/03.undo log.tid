@@ -1,0 +1,7 @@
+created: 20220706083753224
+creator: TidGiUser
+modified: 20220706083950035
+modifier: TidGiUser
+tags: mysql事务(主要基于inoodb的原理) fx mysql主从复制与读写分离
+title: 03.undo log
+type: text/vnd.tiddlywiki

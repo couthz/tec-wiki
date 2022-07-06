@@ -1,0 +1,40 @@
+created: 20220615052101165
+creator: TidGiUser
+modified: 20220615071258000
+modifier: TidGiUser
+tags: mysql事务(主要基于inoodb的原理)
+title: 04.mysql是怎么加锁的？？
+type: text/vnd.tiddlywiki
+
+! row_search_mvcc:innodb完成查询的核心方法
+
+从[[mysql服务端架构]]中可以看出，MySQL其实是分成server层和存储引擎层两部分，每当执行一个查询时，server层负责生成执行计划，即选取即将使用的索引以及对应的扫描区间。然后调用存储引擎的接口
+
+''server层和存储引擎层是以记录为单位进行通信的，如果是innodb引擎，读取一条记录最重要的函数就是row_search_mvcc''
+
+在row_search_mvcc里，''对一条记录进行诸如多版本的可见性判断，要不要对记录进行加锁的判断，要是加锁的话加什么锁的选择，完成记录从InnoDB的存储格式到server层存储格式的转换''等等等等十分繁杂的工作。
+
+''其实对于UPDATE、DELETE语句来说，执行它们前都需要先在B+树中定位到相应的记录，所以它们也会调用row_search_mvcc。''
+
+''InnoDB对记录的加锁操作主要是在row_search_mvcc中的''，像SELECT ... LOCK IN SHARE MODE、SELECT ... FOR UPDATE、UPDATE、DELETE这样的语句都会调用row_search_mvcc完成加锁操作。
+
+! 重要变量
+set_also_gap_locks：表示是否加gap锁
+
+即如果当前执行的是SELECT ... LOCK IN SHARE MODE或者SELECT ... FOR UPDATE这样的加锁读语句（非DELETE或UPDATE语句），并且隔离级别不大于READ COMMITTED 时，将set_also_gap_locks设置为FALSE。
+
+> 换言之，gap锁只有在RR，S级别下使用锁定读才会生效
+> delete,update会添加吗？？？
+
+innodb_locks_unsafe_for_binlog：默认是0，表示全局会使用gap锁，这个变量未来就不使用了
+
+prebuilt->select_lock_type：表示加锁的类型
+
+LOCK_NONE表示不加锁，LOCK_S表示加S锁（比方说执行SELECT ... LOCK IN SHARE MODE时），LOCK_X表示加X锁（比方说执行SELECT ... FOR UPDATE、DELETE、UPDATE时）。
+
+! 一条语句加锁的影响因素
+
+
+注意：''加锁只是解决并发事务执行过程中引起的脏写、脏读、不可重复读、幻读这些问题的一种解决方案（MVCC算是一种解决脏读、不可重复读、幻读这些问题的一种解决方案），一定要意识到加锁的出发点是为了解决这些问题，不同情景下要解决的问题不一样，才导致加的锁不一样，千万不要为了加锁而加锁，容易把自己绕进去。''
+
+

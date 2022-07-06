@@ -1,0 +1,167 @@
+created: 20220704080629717
+creator: TidGiUser
+modified: 20220704142328882
+modifier: TidGiUser
+tags: 分库分表 fx [[12.sharding jdbc实操-宏观思路]]
+title: 13.sharding jdbc实操-最常用的内联分片策略(表达式分片策略)
+type: text/vnd.tiddlywiki
+
+! api形式
+直接上代码:
+
+表规则配置类TableRuleConfiguration，包含了五个要素：
+
+逻辑表、真实数据节点、数据库分片策略、数据表分片策略、分布式主键生成策略；
+
+宏观步骤:
+
+1. 指定所有数据节点, 并且配置逻辑表名与数据节点的对应
+
+2. 设置分库路由和分表路由的策略
+
+3. 指定主键生成算法
+
+```java
+    protected TableRuleConfiguration userShardingRuleConfig() {
+        String logicTable = USER_LOGIC_TB;  //t_user
+
+        //获取实际的 ActualDataNodes(数据节点)
+        //groovy表达式
+        String actualDataNodes = "ds$->{0..1}.t_user_$->{0..1}";
+
+        // 两个表达式的 笛卡尔积
+//ds0.t_user_0
+//ds1.t_user_0
+//ds0.t_user_1
+//ds1.t_user_1
+        /**
+         * logicTable:代码中使用的逻辑表名称
+         * 其实是指定了数据源的范围
+         */
+        TableRuleConfiguration tableRuleConfig = new TableRuleConfiguration(logicTable, actualDataNodes);
+
+        //设置分表策略
+        // inline 模式
+        /**
+         * 参数:分片键, 分片算法
+         * 在上面指定的范围内进行路由
+         */
+        ShardingStrategyConfiguration tableShardingStrategy =
+                new InlineShardingStrategyConfiguration("user_id", "t_user_$->{user_id % 2}");
+        //自定义模式
+//        TableShardingAlgorithm tableShardingAlgorithm = new TableShardingAlgorithm();
+//        ShardingStrategyConfiguration tableShardingStrategy = new StandardShardingStrategyConfiguration("user_id", tableShardingAlgorithm);
+
+        /**
+         * 设置分表路由策略
+         */
+        tableRuleConfig.setTableShardingStrategyConfig(tableShardingStrategy);
+
+        // 配置分库策略（Groovy表达式配置db规则）
+        // inline 模式
+        ShardingStrategyConfiguration dsShardingStrategy = new InlineShardingStrategyConfiguration("user_id", "ds${user_id % 2}");
+        //自定义模式
+//        DsShardingAlgorithm dsShardingAlgorithm = new DsShardingAlgorithm();
+//        ShardingStrategyConfiguration dsShardingStrategy = new StandardShardingStrategyConfiguration("user_id", dsShardingAlgorithm);
+
+        /**
+         * 设置分库路由策略
+         */
+        tableRuleConfig.setDatabaseShardingStrategyConfig(dsShardingStrategy);
+
+//        SnowflakeShardingKeyGenerator keyGenerator = new SnowflakeShardingKeyGenerator();
+        Properties properties = new Properties();
+        properties.setProperty("max.vibration.offset", String.valueOf(4096));
+//        keyGenerator.setProperties(properties);
+        /**
+         * 主键生成规则,现在分表了, 不再是普通的单表自增的id了
+         */
+        tableRuleConfig.setKeyGeneratorConfig(new KeyGeneratorConfiguration("SNOWFLAKE", "user_id", properties));
+        return tableRuleConfig;
+    }
+```
+
+! 配置文件形式
+
+和[[12.sharding jdbc实操-宏观思路]]的思路一样,无非就是
+
+* 设置数据源
+
+* 制定分片规则
+
+...
+
+```
+spring.shardingsphere.datasource.names=ds0,ds1
+spring.shardingsphere.datasource.ds0.type=com.alibaba.druid.pool.DruidDataSource
+spring.shardingsphere.datasource.ds0.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.shardingsphere.datasource.ds0.filters=com.alibaba.druid.filter.stat.StatFilter,com.alibaba.druid.wall.WallFilter,com.alibaba.druid.filter.logging.Log4j2Filter
+spring.shardingsphere.datasource.ds0.url=jdbc:mysql://cdh1:3306/sharding_db1?useUnicode=true&characterEncoding=utf8&allowMultiQueries=true&useSSL=true&serverTimezone=UTC
+spring.shardingsphere.datasource.ds0.password=123456
+spring.shardingsphere.datasource.ds0.username=root
+spring.shardingsphere.datasource.ds0.maxActive=20
+spring.shardingsphere.datasource.ds0.initialSize=1
+spring.shardingsphere.datasource.ds0.maxWait=60000
+spring.shardingsphere.datasource.ds0.minIdle=1
+spring.shardingsphere.datasource.ds0.timeBetweenEvictionRunsMillis=60000
+spring.shardingsphere.datasource.ds0.minEvictableIdleTimeMillis=300000
+spring.shardingsphere.datasource.ds0.validationQuery=SELECT 1 FROM DUAL
+spring.shardingsphere.datasource.ds0.testWhileIdle=true
+spring.shardingsphere.datasource.ds0.testOnBorrow=false
+spring.shardingsphere.datasource.ds0.testOnReturn=false
+spring.shardingsphere.datasource.ds0.poolPreparedStatements=true
+spring.shardingsphere.datasource.ds0.maxOpenPreparedStatements=20
+spring.shardingsphere.datasource.ds0.connection-properties=druid.stat.merggSql=ture;druid.stat.slowSqlMillis=5000
+spring.shardingsphere.datasource.ds1.type=com.alibaba.druid.pool.DruidDataSource
+spring.shardingsphere.datasource.ds1.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.shardingsphere.datasource.ds1.filters=com.alibaba.druid.filter.stat.StatFilter,com.alibaba.druid.wall.WallFilter,com.alibaba.druid.filter.logging.Log4j2Filter
+spring.shardingsphere.datasource.ds1.url=jdbc:mysql://cdh1:3306/sharding_db2?useUnicode=true&characterEncoding=utf8&allowMultiQueries=true&useSSL=true&serverTimezone=UTC
+spring.shardingsphere.datasource.ds1.password=123456
+spring.shardingsphere.datasource.ds1.username=root
+spring.shardingsphere.datasource.ds1.maxActive=20
+spring.shardingsphere.datasource.ds1.initialSize=1
+spring.shardingsphere.datasource.ds1.maxWait=60000
+spring.shardingsphere.datasource.ds1.minIdle=1
+spring.shardingsphere.datasource.ds1.timeBetweenEvictionRunsMillis=60000
+spring.shardingsphere.datasource.ds1.minEvictableIdleTimeMillis=300000
+spring.shardingsphere.datasource.ds1.validationQuery=SELECT 1 FROM DUAL
+spring.shardingsphere.datasource.ds1.testWhileIdle=true
+spring.shardingsphere.datasource.ds1.testOnBorrow=false
+spring.shardingsphere.datasource.ds1.testOnReturn=false
+spring.shardingsphere.datasource.ds1.poolPreparedStatements=true
+spring.shardingsphere.datasource.ds1.maxOpenPreparedStatements=20
+spring.shardingsphere.datasource.ds1.connection-properties=druid.stat.merggSql=ture;druid.stat.slowSqlMillis=5000
+
+
+
+
+spring.shardingsphere.sharding.tables.t_user.actual-data-nodes=ds$->{0..1}.t_user_$->{0..1}
+spring.shardingsphere.sharding.tables.t_user.table-strategy.inline.sharding-column=user_id
+spring.shardingsphere.sharding.tables.t_user.table-strategy.inline.algorithm-expression=t_user_$->{user_id % 2}
+spring.shardingsphere.sharding.tables.t_user.database-strategy.inline.sharding-column=user_id
+spring.shardingsphere.sharding.tables.t_user.database-strategy.inline.algorithm-expression=ds$->{user_id % 2}
+spring.shardingsphere.sharding.tables.t_user.key-generator.column=user_id
+spring.shardingsphere.sharding.tables.t_user.key-generator.type=SNOWFLAKE
+spring.shardingsphere.sharding.tables.t_user.key-generator.props.worker.id=123
+
+spring.shardingsphere.sharding.tables.t_order.actual-data-nodes=ds$->{0..1}.t_order_$->{0..1}
+spring.shardingsphere.sharding.tables.t_order.table-strategy.inline.sharding-column=user_id
+spring.shardingsphere.sharding.tables.t_order.table-strategy.inline.algorithm-expression=t_order_$->{user_id % 2}
+spring.shardingsphere.sharding.tables.t_order.database-strategy.inline.sharding-column=user_id
+spring.shardingsphere.sharding.tables.t_order.database-strategy.inline.algorithm-expression=ds$->{user_id % 2}
+spring.shardingsphere.sharding.tables.t_order.key-generator.column=order_id
+spring.shardingsphere.sharding.tables.t_order.key-generator.type=SNOWFLAKE
+spring.shardingsphere.sharding.tables.t_order.key-generator.props.worker.id=123
+
+
+spring.shardingsphere.sharding.binding-tables[0]=t_order,t_user
+
+
+# 配置公共表
+spring.shardingsphere.sharding.broadcast-tables=t_config
+spring.shardingsphere.sharding.tables.t_config.key-generator.column=id
+spring.shardingsphere.sharding.tables.t_config.key-generator.type=SNOWFLAKE
+spring.shardingsphere.sharding.tables.t_config.key-generator.props.worker.id=123
+
+
+```

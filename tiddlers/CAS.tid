@@ -1,0 +1,107 @@
+created: 20220531053728026
+creator: TidGiUser
+difficulty: 6.1000000000000005
+due: 20220611004044720
+grade: 0
+history: [{"due":"20220610080758425","interval":0,"difficulty":5,"stability":2,"retrievability":1,"grade":-1,"lapses":0,"reps":1,"review":"20220608080758424"}]
+interval: 2
+lapses: 1
+modified: 20220620062937946
+modifier: TidGiUser
+reps: 1
+retrievability: 0.9
+review: 20220610004044720
+stability: 1.4816364413634358
+tags: 线程安全:原子性 fx
+title: CAS
+tmap.id: 43123759-229a-444c-8ada-d184751da92a
+type: text/vnd.tiddlywiki
+
+! 基本原理
+> JVM 的 synchronized 轻量级锁使用 CAS(Compare and Swap)进行自旋抢锁，CAS 是 CPU 指令级的原子操作，并处于[[用户态|用户态和内核态]]下，所以 JVM 轻量级锁开销较小
+
+CAS对应了底层 CPU 指令 cmpxchg, 是一种无锁算法，该算法关键依赖两个值——期望值(旧值)和新值，底层CPU利用原子操作，判断内存原值与期望值是否相等，如果相等则给内存地址赋新值，否则不做任何操作
+
+使用CAS实现乐观锁,或者说无锁编程,一般需要配合自旋:步骤大致如下:
+
+(1)获得字段的期望值(oldValue)。
+
+(2)计算出需要替换的新值(newV alue)。
+
+(3)通过 CAS 将新值(newValue)放在字段的内存地址上，如果 CAS 失败则重复第 1 步,到第 2 步，一直到CAS成功，这种重复俗称CAS自旋。
+
+[img[截屏2022-06-20 14.01.50.png]]
+
+```java
+do {
+  c = get(a); // 读共享变量a(地址a)当前值c(一般会用volatile)
+} while(!cas(v, c, n)) 
+//CAS(地址a当前值v, 期待值c, 更新值n)
+//当v==c时,为true出循环,否则继续
+```
+语义: 执行这段临界区代码的时候(访问共享变量a),乐观地认为不会有其他线程修改变量, ''相当于给地址a加锁''
+
+> 语义上理解CAS,''根据上面的解释,相当于给地址a加锁''
+
+否则++操作本身不是原子的,比如两个线程同时对1添加1,最后结果可能是2,不是3
+[img[ima++ge.png]]
+
+! cas的四个问题
+
+1. ABA问题
+
+ABA问题是指在CAS操作时，其他线程将变量值A改为了B，但是又被改回了A，等到本线程使用期望值A与当前变量进行比较时，发现变量A没有变，于是CAS就将A值进行了交换操作，但是实际上该值已经被其他线程改变过，这与乐观锁的设计思想不符合。
+
+> 引用类型内部的内容变了，引用没变，你就得在乎ABA问题了
+
+ABA问题的解决思路是，每次变量更新的时候把变量的版本号加1，那么A-B-A就会变成A1-B2-A3，只要变量被某一线程修改过，改变量对应的版本号就会发生递增变化，从而解决了ABA问题。
+
+在JDK的java.util.concurrent.atomic包中提供了AtomicStampedReference来解决ABA问题，该类的compareAndSet是该类的核心方法
+
+2. CAS导致自旋消耗???
+
+多个线程争夺同一个资源时，如果自旋一直不成功，将会一直占用CPU。
+
+解决方法：破坏掉for死循环，当超过一定时间或者一定次数时，return退出。JDK8新增LongAddr,和ConcurrentHashMap类似的方法。当多个线程竞争时，将粒度变小，将一个变量拆分为多个变量，达到多个线程访问多个资源的效果，最后再调用sum把它合起来。
+
+3. CAS只能单变量
+
+CAS的原子操作只能针对一个共享变量，假如需要针对多个变量进行原子操作也是可以解决的。
+
+方法：CAS操作是针对一个变量的，如果对多个变量操作，1. 可以加锁来解决。2 .封装成对象类解决。
+
+4. CAS总线风暴
+
+CAS操作对应的底层指令:cmpxchg(Compare and Exchange)
+
+程序会根据当前处理器的类型是否为多核处理器，来决定是否为cmpxchg指令添加lock 前缀。如果程序是在多处理器上运行，就为 cmpxchg 指令加上 lock 前缀(lock cmpxchg)。反之， 如果程序是在单处理器上运行，就省略 lock 前缀，因为单处理器不需要 lock 前缀提供的内存屏障 效果。
+
+介绍 volatile 关键字原理时讲到，Lock 前缀指令有以下三个作用:
+
+(1)将当前处理器缓存行的数据立即写回系统内存。
+
+(2)Lock 前缀指令会引起在其他 CPU 里缓存了该内存地址的数据无效。 
+
+(3)Lock 前缀指令禁止指令重排。
+
+为了保障“Cache 一致性”， 不同的 Core 需要通过总线的来回通信，所产生的流量一般称为“Cache 一致性流量”。因为总线 被设计为固定的“通信能力”，如果 Cache 一致性流量过大，总线将成为瓶颈，这就是所谓的“总 线风暴”。
+
+那么，JUC 基于 CAS 实现的轻量级锁，如何避免总线风暴呢?答案是:使用队列对抢锁线 性进行排队，最大程度上减少了 CAS 操作数量。
+
+! 提高CAS性能的方式
+
+如何提升 CAS 性能?
+提升 CAS 性能有效方式之一:是以空间换时间，分散竞争热点。较为常见的方案为:
+
+(1)分散操作热点，使用 LongAdder 替代基础原子类 AtomicLong，LongAdder 将单个 CAS 热点(value 值)的分散到一个 cells 数组中。
+
+(2)使用队列削峰，将发生 CAS 争用的线程加入一个队列中排队，降低 CAS 争用的激烈程 度。JUC 中非常重要的基础类 AQS(抽象队列同步器)就是这么做的。
+
+提升 CAS 性能有效方式之二:是使用线程本地变量，从根本上避免竞争。
+
+! CAS 操作在 JDK 中的应用
+CAS 在 java.util.concurrent.atomic 包中的原子类、Java AQS 以及显式锁、CurrentHashMap 等 重要并发容器类的实现上，都有非常广泛的应用。
+
+在 java.util.concurrent.atomic 包的原子类如 AtomicXXX 中，都使用了 CAS 保障对数字成员 进行操作的原子性。
+
+java.util.concurrent 的大多数类(包括显式锁、并发容器)都基于 AQS 和 AtomicXXX 实现， 而 AQS 通过 CAS 保障其内部双向队列头部、尾部操作的原子性。

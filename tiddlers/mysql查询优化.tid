@@ -1,0 +1,21 @@
+created: 20220614134414369
+creator: TidGiUser
+difficulty: 5
+due: 20220623111730010
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111730010
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111730010
+stability: 2
+tags: mysql fx undo ?
+title: mysql查询优化
+type: text/vnd.tiddlywiki
+
+https://blog.csdn.net/weixin_35642961/article/details/113597499
+https://tech.meituan.com/2014/06/30/mysql-index.html
+https://tech.meituan.com/2022/04/21/slow-query-optimized-advice-driven-by-cost-model.html

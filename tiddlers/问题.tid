@@ -1,0 +1,9 @@
+created: 20220705113749823
+creator: TidGiUser
+modified: 20220705113928026
+modifier: TidGiUser
+tags: [[技术:对错第二, 系统化第一]]
+title: 问题
+type: text/vnd.tiddlywiki
+
+1. 会问分库分表吗??? 是不是分库分表 容量达到瓶颈一定会去做, 但是qps达到了, 并不一定先上分库分表

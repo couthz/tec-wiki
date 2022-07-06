@@ -1,0 +1,141 @@
+created: 20220620125106020
+creator: TidGiUser
+modified: 20220620143622272
+modifier: TidGiUser
+tags: AQS
+title: 03.AQS源码:ReentrantLock如何定义钩子函数
+type: text/vnd.tiddlywiki
+
+! 回顾AQS的模版模式
+AQS模版完成了具体线程进出等待队列的(如获取资源失败入队/唤醒出队等)基础、通用逻辑。 基于通用、基础逻辑，AQS 提供一种实现阻塞锁和依赖 FIFO 等待队列的同步器的框架，AQS 模 板为 ReentedLocK、CountDownLatch、Semaphore 提供了优秀的解决方案。
+
+自定义的同步器(经常命名为Sync)，只需要实现共享资源 state 的获取与释放方式即可
+
+客户端获取锁的方法,经常需要调用模版方法acquire(语义:独占式获取资源),但并不一定是直接调用,在ReentrantLock的公平与非公平锁中就有所区别
+
+! 非公平锁的抢占流程
+这里比前一节的最naive的锁复杂了一点点,之前是定义了一个继承AQS的Sync,并且实现钩子方法,然后客户端的lock直接调用了sync.acquire()
+
+[img[截屏2022-06-20 21.01.10.png]]
+
+!!同步器子类NonfairSync
+
+NonfairSync的lock方法:
+
+ReentrantLock“非公平”性即体现在这里,lock没有直接调用acquire,而是直接先抢锁
+
+```java
+final void lock() {
+		if (compareAndSetState(0, 1))
+			setExclusiveOwnerThread(Thread.currentThread());
+		else
+			acquire(1);
+}
+```
+
+!! 非公平的抢占钩子方法:
+
+```java
+protected final boolean tryAcquire(int acquires) {
+		return nonfairTryAcquire(acquires);
+}
+```
+
+```java
+final boolean nonfairTryAcquire(int acquires) {
+	final Thread current = Thread.currentThread();
+	int c = getState();
+	if (c == 0) {
+	  //如果出现了任务队列 首节点线程完工了，将state设置为0，直接去抢锁,还是非公平的思想
+	  //acquires一定会是1,只不过acquires模版方法将它设置为了变量
+		if (compareAndSetState(0, acquires)) {
+			setExclusiveOwnerThread(current);
+			return true;
+		}
+	}
+	//可重入
+	else if (current == getExclusiveOwnerThread()) {
+		int nextc = c + acquires;
+		if (nextc < 0) // overflow
+		  throw new Error("Maximum lock count exceeded");
+		setState(nextc);
+		return true;
+	}
+	return false;
+}
+```
+! 公平锁的抢占流程
+
+[img[截屏2022-06-20 22.14.51.png]]
+
+!! 公平锁的同步器子类FairSync
+
+```java
+final void lock() {
+	acquire(1);
+}
+```
+!! 公平的抢占钩子方法tryAcquire
+
+公平抢占的钩子方法中，首先判断是否有前驱，''如果有前驱，并且当前线程不是锁的占有线程，那么钩子方法就返回 false''，模板方法会进入排队的执行流程，可见，公平锁是真正公平的。
+
+```java
+/**
+ * Fair version of tryAcquire.  Don't grant access unless
+ * recursive call or no waiters or is first.
+ */
+protected final boolean tryAcquire(int acquires) {
+	final Thread current = Thread.currentThread();
+	int c = getState();
+	if (c == 0) {
+	  //队列为空,或者
+		if (!hasQueuedPredecessors() &&
+			compareAndSetState(0, acquires)) {
+			setExclusiveOwnerThread(current);
+			return true;
+		}
+	}
+	else if (current == getExclusiveOwnerThread()) {
+		int nextc = c + acquires;
+		if (nextc < 0)
+			throw new Error("Maximum lock count exceeded");
+		setState(nextc);
+		return true;
+	}
+	return false;
+}
+```
+!! 是否有前驱节点的判断hasQueuedPredecessors
+
+true if there is a queued thread preceding the current thread, and false if the current thread is at the head of the queue or the queue is empty
+
+(1)当 h!=t 不成立的时候，也就是 h==t 成立，说明 h 头结点、t 尾结点要么是同一个节点， 要么都是 null，此时 hasQueuedPredecessors 返回 false 表示没有前驱。
+
+(2)当 h!=t 成立的时候，进一步检查 head.next 是否为 null，如果为 null，返回 true，表示 有前驱。什么情况下 h!=t 同时 h.next==null 呢，有其他线程第一次正在入队时，可能会出现。其 他线程执行 AQS 的 enq 方法，compareAndSetHead(node)完成，还没执行 tail=head 语句时，此时 t=null,head=new Node(),head.next=null。
+
+(3)如果 h!=t 成立，head.next != null，则判断 head.next 是否是当前线程，如果是返回 false， 否则返回 true，表示有前驱。
+
+总结就是:
+
+1. 队列为空: 可能前面没有线程, 也可能有(只是说有,但可能已经释放锁了),但是懒加载没有创建头节点.这时可以试着抢锁
+
+2. h==t: 只有一个头节点, 前面有一个线程, 可以试着抢锁
+
+> ''队列空不代表没有线程正在占用锁;非空,头节点一定代表正在抢占锁的线程或者刚释放锁的线程(这时还没被后继线程占锁)''
+
+3. 已经有head,head后面有其他线程正在入队, 不能抢锁,只能入队
+
+4. 已经有head,head后面已经有节点,判断是不是自己, 是的话就可以试着抢锁
+
+```java
+public final boolean hasQueuedPredecessors() {
+        // The correctness of this depends on head being initialized
+        // before tail and on head.next being accurate if the current
+        // thread is first in queue.
+        Node t = tail; // Read fields in reverse initialization order
+        Node h = head;
+        Node s;
+        return h != t &&
+            ((s = h.next) == null || s.thread != Thread.currentThread());
+    }
+```

@@ -1,0 +1,175 @@
+created: 20220620145056329
+creator: TidGiUser
+modified: 20220625043837434
+modifier: TidGiUser
+tags: 线程安全:可见性 fx undo
+title: 00.缓存一致性
+type: text/vnd.tiddlywiki
+
+{{cache和buffer的区别}}
+
+! 单核cpu的缓存策略
+> 单核处理器下的 Cache Policy 要解决的问题可以被概括为：
+> CPU 从 Cache 中读到的数据必须是最近写入的数据
+
+* CPU读Cache时：
+** 若hit，则CPU直接从Cache中读取数据即可。	
+** 若miss，有两种处理方式：
+*** Read through，直接读内存；
+*** ''Read allocate，先把数据读取到Cache中，再从Cache中读数据。''
+> cache减少了数据从慢速设备中读取的总量，关注局部性原理，存在某种算法去选择「什么数据需要保存在cache中」，以及淘汰算法。
+* CPU写Cache时：
+** 若hit，有两种处理方式：
+*** Write through：把数据同时写到Cache和内存中；
+*** ''Write back：先把数据写到Cache中，再通过flush方式写入到内存中。（只需要在数据 D 被置换前将其写入 Memory 即可,可以视为对write through的改进, 为此我们可以为每个 Cache Line 增加一个脏位 (Dirty Bit)''
+> 这时cache有buffer的作用, 流量整型, 减少磁盘IO次数, 确保瞬间大流量不击垮后端(但是流量最终还是会到后端, 削峰)
+** 若miss，有两种处理方式：
+*** ''Write allocate：先把要写的数据载入到Cache中，写Cache，然后再通过flush方式写入到内存中；''
+*** No write allocate：直接把要写的数据写入到内存中
+> 一般，Write Allocate与Write Back一起使用，No Write Allocate与Write Through一起使用。
+
+''由此,缓存行也会有如下的结构:''
+
+T：block的唯一标识Tag（Memory 中对应的最小单位数据称为 Cache Block，Cache 中与单个 Cache Block 对应的存储空间称为 Cache Line）
+
+V：用于标记 Cache Line 是否有数据的有效位 V
+
+D：脏位，Write back策略中，如果缓存页要被淘汰了，脏位为1才会写入内存
+[img[截屏2022-06-21 19.30.20.png]]
+
+! 多核cpu缓存一致性问题的根源:cpu核的私有缓存
+在多核 CPU 中，如果这些核共用一套缓存，由于单套 Cache 的吞吐跟不上，无法达到最佳性能。这时候就需要在每个核上再加一级私有缓存：
+[img[截屏2022-06-20 23.08.48.png]]
+图中的 L1 高速缓存和 L2 高速缓存都只能被一个单独的 CPU 内核使用，L3 高速缓存可以被同一个插槽上的 CPU 内核共享，主存由全部插槽上的所有 CPU 核共享。
+
+CPU 读取数据时，先从 L1 中读取，如果没有命中，再到 L2、L3 中读取，假如这些高速缓存都没有命中，它就会到主存中找所需要的数据。
+
+''不过单核cpu不会出的问题是: 假如,core1在修改了私有缓存L1的数据,core4怎么知道呢??? 私有缓存可能不一致''
+
+''然而,要保证并行计算的正确性，就必须保证每个核私有缓存之间的数据一致且永远是最新版本, 多核处理器上的各核之间必须遵守某种数据读写协议，才可能在获得多核计算力的同时维持计算的正确性，我们称这种数据读写协议为 Cache Coherence Protocols''
+
+> Cache Coherence 的要求??
+
+1. 从内存地址 MX 将数据 D 读入到核 C1 的 Cache 中，在其它核没有写入数据到 MX 的情况下，读入的数据 D 必须是 C1 最近写入的数据值。(单核 CPU 的 Cache Coherence 定义)
+
+2. 如果 C1 写入数据到 MX 中，''经过足够长的一段时间后???''，在其它核没有写入数据的情况下，C2 必须能够读入 C1 写入的数据值。
+
+3. 针对地址 MX 中的来自于各个核的写入操作必须被序列化，''即在每个核眼中，数据的写入顺序相同。''
+
+! 实现缓存一致性
+
+要在多核 CPU 中实现 Cache Coherence，''需要解决的根本问题是：让每个读操作在执行前能够获得所有最近的写操作历史''。这就需要缓存之间存在通信机制
+
+> 单核cpu缓存策略解决的问题一样
+
+从写操作传递信息的内容出发，可以将 Cache Coherence Protocols 划分为两类：Write-Update(写更新) 和 Write-Invalidate(写失效)。Write-Update 就是在写入数据时，将所有其它同级 Cache 中相同的 Cache Line 更新成最新数据；Write-Invalidate 就是在写入数据时，将所有其它同级 Cache 中相同的 Cache Line 标记为不合法。
+
+从写操作传递信息的方式出发，可以将 Cache Coherence Protocols 划分为两类：Snooping(监听式) 和 Directory(目录式)。Snooping 将写数据的信息通过共享总线 (Shared Bus) 广播给其它同级 Cache，同时保证写操作的顺序一致；Directory 在内存中为每个 Cache Line 标记额外的元信息，每个 Cache Line 的读写控制分而自治，将写数据的信息通过点对点的方式传递。
+
+任何一种 Cache Coherence Protocol 基本都可以从这两个维度被归类为以下四类：
+
+[img[截屏2022-06-21 19.56.32.png]]
+
+!! Write-Update Snooping Example、
+1. write through策略, 即同时写cache和内存,不设置dirty位
+
+写入数据时，Cache会将写请求通过总线发送到Memory中，并将Memory Block中T对应Cache Line中的数据更新(write through)；
+
+同时，其它核的Cache会在总线上''监听''信息，如果发现内部也存有标识符为T的Memory Block，则将其对应的Cache Line更新(''总线上的信息肯定包含了缓存行标志位T和缓存中的数据,因此发的信息量比较大'')。
+
+如果多个核同时发送针对Cache Line T 的写请求，''这时只有一个核可以获得总线的使用权''，当整个Write-Update完整过程执行完毕后，其它核才能继续争夺总线的使用权。''这也保证了Cache Coherence定义中的第三条''。
+
+读取数据时，如果Cache Line T 在 Cache 中的标记位 V 为 0，即触发 Cache Miss，Cache 会向 Memory 发起读''请求；''同时其它核的 Cache 会在总线上监听信息，但它们并不关心读请求，因此这个过程没有其它事情发生；如果目标 Block 在 Cache 中的标记位 V 为 1，则直接返回。
+
+[img[wtsnnopingthrough.png]]
+
+改进1: 设置dirty bit
+采用 Write-Through 的方式，每当某个 Cache Line 写入数据时，都同时写穿到Memory 中。本身Memory距离较远，读写数据时间长，''如果每次都写cache内存,就容易成为瓶颈'', 因此改用write back
+
+写入数据时要注意,cpu核自己的私有cache中,脏位D会置为1, 其他cache监听到缓存行T的修改, 更新数据后, D一定会为0
+
+> ''dirty bit为1的语义:置换出cache时要写回内存,这里写回一次就够了''
+
+读数据时要注意:如果读某个cache发生了,v=0, cache miss,这时读请求会发到总线, 其他cache这次会关心读请求, 如果有v=1的数据就截获读请求,把数据回传给请求方
+
+''综上: 减少了读穿和写穿的频率''
+
+[img[write back.png]]
+
+改进2: 共享标志位减少写总线
+
+write update策略中,每次写数据时，为了一致性,依然要将信息发送到共享总线。''大多数情况下，某 Cache Line T 对应的数据只有单个核会访问，因此如果能够提前识别其它核的 Cache 是否拥有该数据，避免向总线写入数据，就可以进一步提高整体性能''。正因为此，我们可以尝试再加入一个共享标记位 (Shared Bit)，用于标记目标 Cache Line 是否同时存在于其它核的 Cache 中
+
+''若 Cache Line T 的共享标记位 S 为 0，则只写入本地缓存；若共享标记位 S 为 1，则写入本地缓存的同时将写入信息发送到共享总线
+''
+[img[sharebit.png]]
+
+!! Write-Invalidate Snooping Example
+
+利用 Write-Update Snooping Example + Dirty Bit + Shared Bit 的结构，我们来看 Write-Invalidate Snooping 的工作模式。
+
+读取数据时，与 Write-Update Snooping 类似，V 为 0 时触发 Cache Miss(''加上前面的减少读穿策略'')；V 为 1 时直接读取本地缓存。
+
+写入数据时，同样,S=0时不发送写入信息,S=1时向总线发送写入信息;但是和Write-Update不同的是:
+
+''本核的私有cache中的cache line有效位v保持为1,其他cache不会更新数据,只是会将对应的cache line标记为v=0(数据失效), 
+
+同时每个cache中cache line, S都变为0,表示不再是共享数据''
+[img[invalidate-snooping.png]]
+
+!! Update V.S. Invalidate Coherence
+
+[img[截屏2022-06-21 20.34.39.png]]
+
+在实践中普遍被采用的还是 Invalidate Coherence。原因在于：在多核 CPU 的运行时中，一个最频繁的操作就是将一个 Thread 从一个核移动到另一个核上运行。分析一下这种场景：
+
+''Write-Update: thread移到另一个线程, 这时写数据(无论是否miss), 大概率之前运行thread的核cache也有数据,s=1, 这样每次写一定会发信息到总线''
+
+
+''Write-Invalidate:thread移到另一个线程, 写一次,就将其他cache失效了,之后再写也不会发信息到总线''
+
+> 说白了, 线程的切换大概率会导致某个缓存行会在多个cache中共享
+
+[img[截屏2022-06-21 20.36.22.png]]
+
+! MESI
+V(是否有效),D(是否脏数据),S(是否独占)三个标志位,有8种组合,但是cache line实际上不需要8种状态,MESI协议规定只需要4种状态:
+
+M(Modified)：S=0, D=1,V=1   独占，脏数据，有效  （没有非独占，脏数据，有效的情况，因为你修改了之后，别人就会变成I）
+
+> 一般就是修改了私有cache的情况
+
+E(Exclusive)：S=0, D=0,V=1   独占，非脏数据，有效
+
+> cpu核的读请求miss,没被其他核拦截,就从内存读数据,读进来就是E
+
+S(Shared)：S=1, D=0,V=1  非独占，非脏数据，有效
+
+> cpu核的读请求miss,被其他核拦截了,大家最终都会变成S
+
+I(Invalid)：V=0  无效
+
+> 只要有cache写了,就会把其他cache置为I
+
+考虑一下情况:
+
+* 核A读cache
+** T存在，并且状态不是I，没miss，状态不变
+** miss，读主存，请求会发送到总线上：
+*** 其他核没有数据，核A读入cache，缓存行T状态为E
+*** 如果核B有T的有效数据，监听了请求（远程读）会拦截请求，核A得到其他核同步过来的数据(''变为S'')，就不用读主存了，但也会知道当前数据有多个核拥有:
+**** 核B的缓存行T如果状态是M，''数据会同步到主存''，A，B的缓存行T都变为了S
+**** 核B的缓存行T如果状态是E，A，B的缓存行T都变为了S
+**** 核B的缓存行T如果状态是S，A缓存行T都变为了S
+
+  2. 核A写cache
+
+miss，让其他核状态变为I，并且会从其他核那里读过来有效数据（read invalidate指令）(如果其他核没有,应该就是从主存读入了,''这里和读miss类似'')，自己再写入数据，变为M（''store buffer会优化这个''）
+
+没miss，状态一定变为M，（如果是E变为了M，才会把写请求发到总线），其他核的相同缓存行状态一定变为I
+
+> 没有非独占，脏数据，有效的情况，因为你修改了之后，别人就会变成I (和write update不一样)
+
+! MESI的优化
+!! Store Buffer
+

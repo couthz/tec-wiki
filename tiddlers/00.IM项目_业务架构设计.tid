@@ -1,0 +1,48 @@
+created: 20220612075209249
+creator: TidGiUser
+difficulty: 5
+due: 20220623111647808
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111647808
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111647808
+stability: 2
+tags: IM项目 fx ?
+title: 00.IM项目:业务架构设计
+type: text/vnd.tiddlywiki
+
+基本套路：
+[img[截屏2022-06-12 15.55.51.png]]
+
+业务场景：
+[img[截屏2022-06-12 15.56.18.png]]
+
+把面向过程的场景 转换为 [[面向对象]]的模块
+
+指导思想：高内聚低耦合
+
+例如抽取公共的session模块
+
+[img[截屏2022-06-12 16.00.32.png]]
+
+如果是这么开发模块就变成面向过程了
+
+[img[截屏2022-06-12 16.01.14.png]]
+
+模块内部设计：
+
+动作：可能是自己调用的，也可能是别人调用的
+[img[截屏2022-06-12 16.01.56.png]]
+
+例子：
+
+其实内部边界梳理的时候，是按照场景分别去梳理的
+
+然后根据不同场景，区分出变与不变
+[img[截屏2022-06-13 11.08.51.png]]
+

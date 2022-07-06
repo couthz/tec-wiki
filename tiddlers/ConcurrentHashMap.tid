@@ -1,0 +1,39 @@
+created: 20220616150445076
+creator: TidGiUser
+difficulty: 5
+due: 20220623111802508
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111802508
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111802508
+stability: 2
+tags: fx Java容器 ?
+title: ConcurrentHashMap
+type: text/vnd.tiddlywiki
+
+! 源码方法论
+
+1. 不一定顺序看，可以从结果推，比如知道返回值的意义，反推返回值怎么得到的
+
+（读1.8的concurrentHashmap的`addCount`，有感）
+
+1. 不一定顺序看，可以按实际执行顺序看
+
+! 用hashtable为什么不好
+例如在[[迭代器模式]]也提到了并发读写可能出现的异常
+
+但是如果两个线程的操作根本没在一个桶内,其实不会有冲突.
+
+锁的粒度可以变小.
+
+! hashmap并发问题
+1. [[循环链表问题|HashMap1.8做了哪些改进]],1.8其实已经解决了
+
+2. 多线程的 put 可能导致元素的丢失。多线程同时执行 put 操作，如果计算出来的索引位置是相同的，那会造成前一个 key 被后一个 key 覆盖，从而导致元素的丢失。此问题在 JDK 1.7 和 JDK 1.8 中都存在。
+
+3. put 和 get 并发时，可能导致 get 为 null。线程 1 执行 put 时，因为元素个数超出 threshold 而导致 rehash，线程 2 此时执行 get，有可能导致这个问题。这个问题在 JDK 1.7 和 JDK 1.8 中都存在。

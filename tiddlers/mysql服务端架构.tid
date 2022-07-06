@@ -1,0 +1,28 @@
+created: 20220615032305752
+creator: TidGiUser
+difficulty: 5
+due: 20220623111733131
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111733131
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111733131
+stability: 2
+tags: mysql fx ?
+title: mysql服务端架构
+type: text/vnd.tiddlywiki
+
+[img[mysql server.png]]
+
+大致可以讲服务端分为server层和存储引擎层，
+
+每当执行一个查询时，server层负责生成执行计划，即选取即将使用的索引以及对应的扫描区间，然后调用存储引擎层的接口
+
+> Mysql会抽象出数据库引擎接口，innodb引擎去实现接口
+
+存储引擎层负责物理上如何去查询数据
+

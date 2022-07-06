@@ -1,0 +1,57 @@
+created: 20220625041813399
+creator: TidGiUser
+modified: 20220625072613332
+modifier: TidGiUser
+tags: redis
+title: redis实现队列
+type: text/vnd.tiddlywiki
+
+! list实现单播队列
+
+[img[redislist.png]]
+
+list时一个双端的队列, 左右都能存取, 还能像数组一样操作指定下标的元素, 例如lset替换, linsert插入
+
+实现一个阻塞的单播队列: blpop,可以取出并删除第一个元素
+
+! pub/sub消息订阅模式实现广播队列
+> 例如,如果想实现一个直播室
+
+1. PUBLISH 主题 hello 返回的是有几个订阅者收到了消息
+
+2. subscribe 主题 这时会以阻塞式接收消息
+
+[img[redispubsub.png]]
+
+缺点:根据[[cache和buffer的区别]]的讲解, redis的消息订阅模式没有写buffer的功能, 也不能像mq一样暂存数据, 消费者一旦中途下线, 是无法消费到下线期间的数据的
+
+! 实现延时队列
+使用sortedset，拿时间戳作为 score，
+
+生产者用消息内容作为key调用zadd来生产消息
+
+消费者轮询, 用zrangebyscore指令获取N秒之前的数据
+> zrangebyscore: 按照顺序，取出某个分值范围内的数据
+
+! 如果一定要用redis实现一个能存储消息的队列呢??? 上架构
+
+读客户端有不同的时态需求 ，根据这个设计架构
+
+1. 全量数据放数据库
+
+2. 三天之内的数据放redis，sortedset（时间作为score）？？不能用list吗？？
+
+3. 实时性用发布订阅来实现
+
+4. 历史性的数据用拉数据，也就是客户端主动调其他命令查询了
+
+
+[img[imagejiagouredis.png]]
+
+写客户端如何发消息？可以把消息分别发给channel，发给sortedset，发给数据库（中间通过kafka，降低写压力？？？）。
+
+❓ 这里就会存在问题，刚写给channel，写客户端就挂了怎么办？？？（事务，但是前两条命令起码还是redis的命令，写kafka跟redis又没关系了，怎么加到事务里呢？？）
+
+课上有人的做法是：让客户端只写一次，让有zset的redis订阅另一个redis（怎么做到redis实例订阅另一个实例？？？一个redis实例怎么能成为客户端？？感觉只能靠中间的一个客户端实例去中转），再让一个kafka消费者订阅redis，负责收集写数据库的消息。
+
+[img[imageredisjiagou2.png]]

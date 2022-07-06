@@ -1,0 +1,90 @@
+created: 20220614060515521
+creator: TidGiUser
+difficulty: 5
+due: 20220623111719287
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220621111719287
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111719287
+stability: 2
+tags: mysql事务(主要基于inoodb的原理) fx ?
+title: 01.事务隔离级别
+type: text/vnd.tiddlywiki
+
+! 什么是事务隔离级别
+事务隔离级别是同时执行多个事务时权衡 性能 和 结果的可靠性，一致性和可重现性。 
+
+! 事务并发的四种问题（严重性由高到低）
+1. 脏写（写脏数据）
+
+[img[脏写.png]]
+
+B事务写-A事务写-A事务提交-B事务回滚
+
+''A事务改了B事务还没提交的数据（写脏数据），所以B事务把A事务改完的数据回滚了，相当于A事务什么也没干''，B事务的undo log没有办法记住其他事务的更新
+
+2.脏读（读脏数据）
+
+[img[脏读.png]]
+
+B事务写-A事务读-B事务回滚
+
+''A事务读了B事务还没提交的数据（读脏数据），相当于A事务读到了不存在的数据''
+
+3.不可重复读
+
+[img[不可重复读.png]]
+
+我们在Session B中提交了几个隐式事务（注意是隐式事务，意味着语句结束事务就提交了）
+
+''A事务开启之后，每次其他事务修改提交的值都能读到，导致读同一个记录会出现不一致，就是不可重复读''
+
+4.幻读
+
+[img[幻读.png]]
+
+看起来和不可重复读很类似，但是''幻读只是重点强调了读取到了之前读取没有获取到的记录''
+
+很多人容易搞混不可重复读和幻读，确实这两者有些相似。但不可重复读重点在于update和delete，而幻读的重点在于insert。
+
+对于先前已经读到的记录，之后又读取不到这种情况，算啥呢？其实这相当于对每一条记录都发生了不可重复读的现象
+
+! 四种隔离级别
+[img[隔离级别.png]]
+
+RU:"select语句以非锁定方式执行"，事务提交前的修改能被看到，会发生脏读
+
+RC：事务提交前的修改不能被看到，不会发生脏读
+
+RR：可重复读：Innodb默认隔离级别
+
+<<<
+
+[[mvcc|02.mvcc]]指的就是在RC,RR两种级别下执行''普通''select语句时访问记录的版本链的过程，可以使不同事务的''读写''操作并发执行。
+
+这两种隔离级别下的普通select都称作一致性读、一致性无锁读、快照读。''[[一致性读|02.mvcc]]是innodb在RC，RU下处理普通select的默认模式''
+
+[[mysql官方文档:一致性读|https://www.docs4dev.com/docs/zh/mysql/5.7/reference/innodb-consistent-read.html]]
+<<<
+
+S：和RR类似
+
+如果关闭autocommit，会将普通select隐式转换成SELECT ... LOCK IN SHARE MODE （读写完全不能并发）
+
+如果开启autocommit，那么普通select语句自身就是一个事务，并且是只读事务，''仅需一致性读就可以完成序列化''
+
+>''显式锁并不会阻塞快照读（普通select），但是开启autocommit之后一条语句的一致性读也肯定不会读buffer中的数据，读的是快照，相当于事务没并发，相当于序列化了''
+
+! 总结innodb解决事务并发的手段
+[[官网文档的概述|https://www.docs4dev.com/docs/zh/mysql/5.7/reference/innodb-transaction-isolation-levels.html]]
+
+说白了，就是在四种隔离级别下，会结合mvcc和锁
+
+其中增删改，锁定读一定会用到锁
+
+普通select在RC，RR下会用到mvcc，S下可能还会用到锁

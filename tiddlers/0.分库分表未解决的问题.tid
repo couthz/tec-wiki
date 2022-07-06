@@ -1,0 +1,26 @@
+created: 20220704070224906
+creator: TidGiUser
+modified: 20220704111050787
+modifier: TidGiUser
+tags: 分库分表 fx undo
+title: 0.分库分表未解决的问题
+type: text/vnd.tiddlywiki
+
+1. 一开始部署多少库表??
+
+2. 扩容的时机?? 扩容一定是2倍吗?
+
+3. 为什么库表数据量是 2的n次幂
+
+* 定位速度快, 类比hashmap
+* 扩容时迁移的数据少?? [[https://blog.csdn.net/lbh199466/article/details/115528420]]
+
+需要像这里说的, 用上逻辑库吗??
+[img[截屏2022-07-04 15.04.20.png]]
+
+实践场景:
+[[美团分库分表实践|https://tech.meituan.com/2016/11/18/dianping-order-db-sharding.html]]
+[[一次难得的分库分表实践|https://crossoverjie.top/2019/07/24/framework-design/sharding-db-03/]]
+https://tech.kujiale.com/fen-ku-fen-biao-qian-yi-ce-shi-shi-jian/
+
+https://www.51cto.com/article/637727.html

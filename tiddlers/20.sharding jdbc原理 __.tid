@@ -1,0 +1,51 @@
+created: 20220704103636358
+creator: TidGiUser
+modified: 20220704111050792
+modifier: TidGiUser
+tags: 分库分表 undo fx
+title: 20.sharding jdbc原理 ??
+type: text/vnd.tiddlywiki
+
+! 符合jdbc规范
+关键词: 装饰模式, jdbc 适配器模式
+
+代码从原来的单库迁移到分库分表时, 改动很小, 只需要更改数据源即可, 仍然用原来的orm框架
+
+[img[截屏2022-07-04 18.38.09.png]]
+
+只更改数据源, 后面的connection, statement(用于执行sql的对象),resultset都会被偷梁换柱
+[img[截屏2022-07-04 18.40.02.png]]
+
+! sql执行流程???
+
+[img[截屏2022-07-04 19.02.14.png]]
+
+! 路由原理
+
+!! sql语句类型
+1. DQL (Data Query Language) 数据库查询语言
+
+用于从数据库检索数据的SQL命令，统称：DQL， 所以，所有的select语句都属于DQL
+
+2. DML(Data Manipulation Language) 数据库操作语言
+
+用于操作数据库（insert、modify、delete）的SQL命令，统称：DML,''注意是针对数据''
+
+3. DDL (Data Definition Language) 数据库定义语言
+
+用于创建、改变、删除对象的SQL语句统称：DDL。
+ 
+''对表结构进行操作'', create alter drop truncate rename
+
+4. DCL(Data Control Language) 数据库控制语言
+
+用于在数据库访问中控制访问限制的SQL命令统称：DCL
+
+Grant 授权  Revoke  取消授权
+
+5.TCL(Transaction Control Language) 事务控制语言
+
+6. DAL ?
+
+!! 路由类型
+[img[截屏2022-07-04 19.08.44.png]]

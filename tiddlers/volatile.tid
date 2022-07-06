@@ -1,0 +1,45 @@
+created: 20220620062143831
+creator: TidGiUser
+difficulty: 5
+due: 20220623111900195
+grade: -1
+history: []
+interval: 0
+lapses: 0
+modified: 20220624073204160
+modifier: TidGiUser
+reps: 1
+retrievability: 1
+review: 20220621111900195
+stability: 2
+tags: fx 线程安全:可见性 ? undo
+title: volatile
+type: text/vnd.tiddlywiki
+
+要想解决多线程的内存可见性问题，所有线程都必须将共享变量刷新到主内存，一种简单的方案是:使用 Java 提供的关键字 volatile 修饰''共享变量''
+
+! 底层原理
+volatile修饰的变量,在汇编指令中,如果操作该变量,会在操作指令前添加lock指令:
+[img[截屏2022-06-23 22.31.02.png]]
+
+该 lock 前缀指令有三个功能:
+
+(1)将当前处理器缓存行的数据立即写回系统内存。
+
+(2)lock 前缀指令会引起在其他 CPU 里缓存了该内存地址的数据无效。
+
+> 这两条可以粗略的理解为: 写直接写主存, 读直接读主存; 或者可以理解为将汇编操作变为“原子的”,可能用总线锁, 也可能用缓存锁
+
+(3)lock 前缀指令禁止指令重排。
+lock 前缀指令的最后一个作用是作为内存屏障(Memory Barrier)使用，可以禁止指令重排序， 从而避免多线程环境下程序出现乱序执行的现象。
+
+! volatile 语义中的内存屏障
+
+在 Java 代码中，volatile 关键字的主要有两层语义:
+
+1. 不同线程对 volatile 变量的值具有内存可见性。即一个线程修改了某个 volatile 变量的值，该值对其他线程立即可见。
+
+2. 禁止进行指令重排序。
+
+
+! volatile性能优化

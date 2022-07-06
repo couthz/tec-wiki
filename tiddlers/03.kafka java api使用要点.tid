@@ -1,0 +1,198 @@
+created: 20220628072224375
+creator: TidGiUser
+modified: 20220628075858756
+modifier: TidGiUser
+tags: kafka
+title: 03.kafka java api使用要点
+type: text/vnd.tiddlywiki
+
+! producer
+```java
+@Test
+    public void producer() throws ExecutionException, InterruptedException {
+
+
+
+        Properties p = new Properties();
+        p.setProperty(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka1:9092,kafka2:9092,kafka3:9092");
+        //kafka 能够持久化, kafka拿到的是byte[],不会对数据进行干预,所以生产消费双方需要约定编解码
+        //kafka是一个app,比如要发送出去,没必要再去用户空间看一眼数据,所以可以使用零拷贝、sendfile系统调用实现快速数据消费
+        p.setProperty(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        p.setProperty(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        p.setProperty(ProducerConfig.ACKS_CONFIG, "1");
+
+        KafkaProducer<String, String> producer = new KafkaProducer<String, String>(p);
+
+        //现在的producer就是一个提供者,面向的是broker,虽然在使用的时候我们是期望将数据发送到topic
+        //也就是在程序中,一个producer可以往某个topic1发,也可以往某个topic2发
+        //本质上producer只是把数据发给topic,只是数据中携带了topic的信息而已
+        /*
+        msb-items
+        2 partition
+        3种商品ID j,每种商品有线性的3个版本号 i
+        相同的商品去一个分区(本质上,相同key的会去一个分区)
+         */
+        for (int i = 0; i < 100; i++) {
+            for (int j = 0; j < 200; j++) {
+                ProducerRecord<String, String> record =
+                        new ProducerRecord<String, String>(TOPIC, "item"+j, "version"+i);
+                Future<RecordMetadata> send = producer.send(record);
+                Thread.sleep(1000);
+
+                RecordMetadata rm = send.get();
+                int partition = rm.partition();
+                long offset = rm.offset();
+                System.out.println("key:" + record.key()
+                        + " val:" + record.value()
+                        + " partition:" + partition
+                        + " offset:" + offset);
+            }
+        }
+    }
+```
+
+! consumer
+
+这里要点是offset的提交时机
+consumer调用poll方法, 拉取的是一个批次, 而且是订阅的多个partition的多条记录, 因此提交offset有多个维度:
+
+1. 记录级, 读取一条记录就提交一次offset,这种最安全
+2. 分区, 读取完一个partition之后提交offset
+3. 批次, 读取完所有partition的所有记录之后提交offset
+
+```java
+ @Test
+    public void consumer() {
+
+        Properties p = new Properties();
+        //基础配置
+        p.setProperty(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka1:9092,kafka2:9092,kafka3:9092");
+        p.setProperty(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        p.setProperty(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+        //消费的细节
+        p.setProperty(ConsumerConfig.GROUP_ID_CONFIG, "g3");
+
+        //AUTO_OFFSET_RESET_CONFIG表示没有历史OFFSET的情况下,或者当前offset的数据已经被删除时,如何重置offset
+        //1.earliest：尽量早
+        //2.latest:消费者连上后,只消费生产者新发的数据
+        //3.none:抛异常
+  p.setProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        //自动或手动提交offset
+        //1.重复消费：有可能已经消费,但还没来得及提交
+        //2.消息丢失: offset已经提交了,但是本地的消息处理操作还没执行完consumer就挂了
+
+        //如果false,就不会自动提交,consumer挂了就一定会丢失进度,这种时候就需要手动提交了
+        //手动提交的粒度：
+        //1.批次
+        //2.分区
+        //3.一条记录
+        p.setProperty(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false"); //自动异步提交,默认5s间隔
+        //p.setProperty(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, ""); //5s
+        //p.setProperty(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, ""); // POLL 拉取数据,弹性,按需,一个批次拉取多少
+
+
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<String, String>(p);
+
+        //上面相当于jdbc基本配置,这里相当于,连到数据库的哪一个库
+        consumer.subscribe(Arrays.asList(TOPIC), new ConsumerRebalanceListener() {
+            //组内消费者数量增减后,触发自动重平衡,平衡之后会进行以下的回调
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> collection) {
+                //再平衡,丢掉了哪些分区
+            }
+
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> collection) {
+                //再平衡,得到了哪些分区
+            }
+        });
+
+        //如果想按时间戳消费,在这个位置修正偏移
+        Map<TopicPartition, Long> tts = new HashMap<>();
+        //通过consumer取回自己分配的分区 as
+        //但是这里有个奇怪的点，只有真正调用poll的时候才会真正建立连接，所以这里as会为空
+        //调用一次poll之后,再调用assignment就能得到
+        Set<TopicPartition> as = consumer.assignment();
+
+
+        //自己填充一个hashmap,为每个分区设置对应的时间戳
+        for (TopicPartition partition : as) {
+            tts.put(partition, System.currentTimeMillis() - 1* 1000);
+        }
+        //通过consumer的api,取回timeindex的数据
+        Map<TopicPartition, OffsetAndTimestamp> offtime = consumer.offsetsForTimes(tts);
+
+        for (TopicPartition partition : as) {
+            //通过取回的offset数据,通过consumer的seek方法,修正自己的消费偏移
+            OffsetAndTimestamp offsetAndTimestamp = offtime.get(partition);
+            long offset = offsetAndTimestamp.offset();
+            consumer.seek(partition, offset);
+        }
+
+        while(true) {
+            //Duration.ofMillis(0)是poll的超时时间,0代表一直阻塞,有数据就拉回来
+            //有可能再次执行到这行时,又攒了很多条了
+            //因此,以下代码的优化很重要
+            //这里攒的批次,和上面MAX_POLL_RECORDS_CONFIG的批次,是不是一个东西？？？？
+            //还有个问题,即使我没有提交offset,poll也不会重复拉以前的数据,这是为什么？？？？看起来只要consumer不挂,临时会有offset记录
+
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(1000));
+
+            //但是实验证明,即使已经没数据可消费了,上面的poll不会阻塞？？？？？
+            System.out.println("-------------------"+"count" +records.count()+"-------------------");
+
+            //多个分区的数据
+            Set<TopicPartition> partitions = records.partitions();
+            for (TopicPartition partition : partitions) {
+                //单独取一个分区的数据
+                List<ConsumerRecord<String, String>> pRecords = records.records(partition);
+                Iterator<ConsumerRecord<String, String>> iter = pRecords.iterator();
+                while(iter.hasNext()) {
+                    ConsumerRecord<String, String> record = iter.next();
+                    System.out.println(record.key()+":"+record.value());
+
+                    //以下这种提交方式最安全,记录级
+                    //单线程、多线程都可以做
+                    //安全性好,对性能影响大
+                    //毕竟,服务器不会老挂,不会那么巧老是丢数据,所以可以适当忽略一点安全性,不用这种方式
+                    OffsetAndMetadata om = new OffsetAndMetadata(record.offset());
+                    HashMap<TopicPartition, OffsetAndMetadata> map = new HashMap<>();
+                    map.put(partition, om);
+                    consumer.commitSync(map);
+                }
+
+                //取分区最后一条数据的offset
+//                OffsetAndMetadata om = new OffsetAndMetadata(pRecords.get(pRecords.size() - 1).offset());
+//                HashMap<TopicPartition, OffsetAndMetadata> map = new HashMap<>();
+//                map.put(partition, om);
+//                consumer.commitSync(map);//按分区粒度提交
+                //这里注意关联上节课，即使分区内部再开线程处理某个key的数据,最终也是按分区粒度提交,每个线程都处理成功,才能提交offset
+                //否则,如果每个线程单独提交offset,就很难维护进度了,有可能2成功了，但1 3 失败了
+                //而且一个分区内部如果拆成多个线程处理了,数据库事务仍然需要单线程处理，因为：
+                //多个线程共享事务很难：https://cloud.tencent.com/developer/article/1745409
+                //一个线程的事务失败了,理应整个分区的操作都失败
+                //总而言之，要么一条条提交offset，要么按分区提交，要么按批次提交，绝对不能按key提交
+
+            }
+            //手动提交的粒度：
+            //1.批次
+            //2.分区
+            //3.一条记录
+            //这就是按批次提交的方式
+            consumer.commitSync();
+        }
+//            Iterator<ConsumerRecord<String, String>> iter = records.iterator();
+//            while(iter.hasNext()) {
+//                //因为一个consumer可以消费多个分区,但是一个分区只能给一个组里的一个consumer
+//                //所以,遍历的时候会看到多个分区的数
+//                ConsumerRecord<String, String> record = iter.next();
+//                //这里就可以多线程处理不同分区的数据
+//
+//            }
+//
+
+    }
+}
+
+```

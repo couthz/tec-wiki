@@ -1,0 +1,38 @@
+created: 20220625080551291
+creator: TidGiUser
+modified: 20220625081111109
+modifier: TidGiUser
+tags: redis
+title: redis事务与watch机制
+type: text/vnd.tiddlywiki
+
+! 事务
+MULTI命令开始事务, EXEC或DISCARD提交或回滚事务
+
+注: 比较鸡肋, 说是事务, 其实就是个命令打包功能, 要么用EXEC全提交, 要么用DISCARD全不执行.
+
+并且,EXEC中途出现异常,不会回滚
+
+注: multi开始后服务器只是把你提交的命令存起来而不执行，提交exec后才全部处理.pipeline只是客户端统一将一批命令一次性发送给服务器，避免多次的开销。
+
+! watch
+配合事务, 能够实现乐观锁的功能,''解决并发竞争问题''
+
+并发竞争问题, 简单来说就是: 多个客户端去set同一个key
+
+[img[截屏2022-06-25 16.09.54.png]]
+
+例子:
+
+这段代码实际上就是实现了zpop, 并且将其原子化
+
+```
+WATCH zset
+element = ZRANGE zset 0 0
+MULTI
+ZREM zset element
+EXEC
+```
+上面的watch策略, 在客户端应该有自旋措施
+
+''原子化的策略, 完全可以用lua脚本''

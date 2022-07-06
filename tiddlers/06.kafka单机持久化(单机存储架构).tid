@@ -1,0 +1,78 @@
+created: 20220628083454320
+creator: TidGiUser
+modified: 20220629024109533
+modifier: TidGiUser
+tags: fx kafka
+title: 06.kafka单机持久化(单机存储架构)
+type: text/vnd.tiddlywiki
+
+! partition
+kafka的配置文件中, 会设置logs文件目录, 也就是保存数据的目录
+
+其中每个文件夹代表一个partition, 名称是''主题-数字''
+[img[截屏2022-06-29 10.14.57.png]]
+
+! segment
+
+[img[截屏2022-06-29 10.15.48.png]]
+
+每个partition都是由滚动的segment段文件组成, 分为:
+
+* log file 数据文件
+* index file 基于offset的索引文件
+* timeindex file 基于时间戳的索引文件
+
+滚动新增可以基于''空间和时间''两个维度:
+
+# 时间维度: Kafka为每个topic默认保存7天的日志, 判断的依据就是比较日志段文件(log segment file)的最新修改时间(last modification time). kafka后台定时每5分钟查一遍过期segment
+# 空间维度: 默认不开启, 必须显式设置log.retention.bytes。一旦用户设置了阈值，那么Kafka就会在定时任务中尝试比较''当前日志量总大小是否超过阈值至少一个日志段''的大小,因为删除是从最老的日志段开始
+
+采用滚动新增而不是单独一个文件的好处:
+
+# 一个partition的数据理论上是没有上限的, 单独一个文件只会越来越大, 如果想删除旧数据, 一个文件是不好删除的
+
+# 多个文件可以把IO负载分开, 使用磁盘阵列卡的话, 吞吐上有好处
+
+!! log file 数据文件
+要点:
+
+# 消息队列数据的特点是顺序写入, 历史数据不修改, 因此数据文件直接在磁盘上顺序写入就行.然而,broker接收的数据可不止写入一个partition, 仍然会有''大量随机IO'', 这里就体现出和[[rocketmq不同的地方|rocketmq单机持久化(单机存储架构)]]了
+
+# 文件默认最大是1G
+
+# 三个文件命名规则, 用文件第一条消息的offset值来命名
+
+[img[截屏2022-06-29 10.29.32.png]]
+
+!! index file
+
+要点:
+
+# 一个索引条目: 由相对offset(4byte)+ position(4byte)组成, 文件名就是baseoffset, position是消息在log file中对应的物理位 置
+
+# index file使用''稀疏索引''，不会每条消息都建立索引,log日志默认每写入4K(log.index.interval.bytes设定的)，会写入一条索引信息到index文件中. 好处:
+## 内存中能够放更多的索引文件, 在高并发的场景下访问的压力其实都转移到索引文件上了, 而不是log file
+## 小文件有利于[[mmap|10.传统IO执行流程与零拷贝？]]吗???
+
+# 在partition中如何通过offset查找message?
+
+第一次二分查找: kafka应该是会维护一个数据结构保存partition的index file名称的列表, 便于二分查找到文件
+
+第二次二分查找: index file的数据会用concurrentSkipList来组织
+
+第三次顺序查找: 找到log file中离目标最近的position, 顺序查找
+
+[img[截屏2022-06-29 10.34.37.png]]
+
+!! timeindex file
+
+# 索引结构: 时间戳(8byte)+ 相对offset(4byte)，
+
+# 在partition中如何通过timestamp查找message?
+
+和利用offset查找相比, 前面多两步二分查找(找文件, 找offset)
+
+## 具体可以看[[消费者api|03.kafka java api使用要点]]的使用
+
+
+

@@ -1,0 +1,132 @@
+created: 20220706060217669
+creator: TidGiUser
+modified: 20220706083003059
+modifier: TidGiUser
+tags: mysql主从复制与读写分离 mysql fx
+title: 00.binlog
+type: text/vnd.tiddlywiki
+
+! binlog的作用
+
+binlog是binary log的缩写，即二进制日志。binlog中记载了数据库发生的变化，比方说新建了一个数据库或者表、表结构发生改变、表中的数据发生了变化时都会记录相应的binlog日志。
+
+主要用在两个方面:
+
+1. 主从复制
+
+2. 数据还原(注意, 不是崩溃恢复)
+
+为了数据的安全性，我们需要定时备份数据库（mysqldump命令），不过这种全量备份我们不可能每秒都做一遍，而是每天或者每个月做一次全量备份。
+
+''比如用delete误删了, 那么用全量备份,执行自该次备份后产生的binlog日志，直到我们写DELETE语句之前的binlog日志为止''
+
+! binlog相关配置
+
+* 查看是否开启:
+
+MySQL服务器并不一定会生成binlog日志，我们可以通过查看log_bin系统变量来判断当前MySQL服务器是否生成binlog日志：
+
+[img[截屏2022-07-06 14.05.15.png]]
+
+* 开启:
+
+如果当前服务器不生成binlog，我们想开启binlog，那么就需要重启服务器，设置log-bin启动选项：
+
+--log-bin[=base_name] 
+
+其中base_name可以不指定, 如果指定了就会以此为binlog的文件名,binlog日志并不是仅写到一个文件中，而是写入一组文件中，这组文件的命名是这样的：
+
+<<<
+basename.000001
+basename.000002
+basename.000003
+basename.000004
+...
+<<<
+
+''注意:此时binlog存到了默认的文件目录中, base_name还可以指定为一个绝对路径, 这样文件就不是存在默认文件目录中了''
+
+! binlog index文件
+
+除了真正存储binlog日志的文件外，MySQL服务器还会在相同的路径下生成一个关于binlog的索引文件，在我的系统上它的名称就是：
+
+basename.index
+
+这个索引文件是一个文本文件，我们可以直接打开：可以看到，这个索引文件只是简单的将各个binlog文件的路径存储了起来而已。
+
+! 查看binlog语句的方法
+
+binlog文件的格式: 
+
+[img[binglogfo.png]]
+
+查看某个文件(比较粗略)
+
+SHOW BINLOG EVENTS IN 'xiaohaizi-bin.000004';
+
+更加详细的方式: mysqlbinlog工具, 示例:
+
+> mysqlbinlog ./xiaohaizi-bin.000001
+
+其中结果会以# at xx开头的表示这是一个事件的开始，诸如：
+
+# at 4：表示在偏移量为4的地方有一个事件，下边是该事件的详细信息。
+
+# at 123表示在偏移量为123的地方有一个事件，下边是该事件的详细信息。
+
+! 基于语句（Statement）和基于行(Row)的binlog
+同一条SQL语句，随着启动选项binlog-format的不同，可能生成不同类型的binlog事件：
+
+* 当以启动选项--binlog-format=STATEMENT启动MySQL服务器时，生成的binlog称作基于语句的日志。此时只会将一条SQL语句将会被完整的记录到binlog中，而不管该语句影响了多少记录。
+
+* 当以启动选项--binlog-format=ROW启动MySQL服务器时，生成的binlog称作基于行的日志。此时会将该语句所改动的记录的全部信息都记录上。
+
+* 当以启动选项--binlog-format=MIXED启动MySQL服务器时，生成的binlog称作基于行的日志。此时在通常情况下采用基于语句的日志，在某些特殊情况下会自动转为基于行的日志（这些具体情况请参考：dev.mysql.com/doc/refman/…
+
+STATEMENT的问题: 
+
+''注意: 基于语句的binlog只将更新语句是什么记录下来了, 基于行的binlog将更新语句执行过程中每一条记录更新前后的值都记录下来了, 在有主从复制的场景中，使用基于语句的日志可能会造成主服务器和从服务器维护的数据不一致的情况, 核心原因:同一个sql语句在不同服务器示例上执行的结果有可能不同,例如:''
+
+```
+INSERT INTO t(c) SELECT c FROM other_table;
+```
+
+如果主库和从库的服务器执行SELECT c FROM other_table返回记录的顺序不同的话''（不同服务器版本、不同的系统变量配置都可能导致同一条语句返回结果的顺序不同）''，那么针对表t相同id值的记录来说，列c就可能具有不同的值，这就会造成主从之间数据的不一致。
+
+另外一些函数的执行基本上都不能复制,比如说 uuid() 函数，日期函数, 每次执行的时候都会生成一个随机字符串，在 master 中记录了 uuid，当同步到 slave 之后
+
+ROW的问题:
+
+Row 格式的日志内容会非常清楚地记录下每一行数据修改的细节，这样就不会出现 Statement 中存在的那种数据无法被正常复制的情况。
+
+不过 Row 格式也有一个很大的问题，那就是日志量太大了，特别是批量 update、整表 delete、alter 表等操作，由于要记录每一行数据的变化，此时会产生大量的日志，大量的日志也会带来 IO 性能问题。
+
+MIXED,折中:
+
+MySQL5.1.8 版开始，MySQL 又推出了 Mixed 格式，这种格式实际上就是 Statement 与 Row 的结合。
+
+在 Mixed 模式下，系统会自动判断 该 用 Statement 还是 Row：一般的语句修改使用 Statement 格式保存 binlog；对于一些 Statement 无法准确完成主从复制的操作，则采用 Row 格式保存 binlog。
+
+Mixed 模式中，MySQL 会根据执行的每一条具体的 SQL 语句来区别对待记录的日志格式，也就是在 Statement 和 Row 之间选择一种。
+
+
+---
+MySQL 5.1.5 之前 binlog 的格式只有 STATEMENT，5.1.5 开始支持 ROW 格式的 binlog，从 5.1.8 版本开始，MySQL 开始支持 MIXED 格式的 binlog
+
+MySQL 5.7.7 之前，binlog 的默认格式都是 STATEMENT，在 5.7.7 及更高版本中，binlog_format 的默认值才是 ROW
+
+
+! binlog 持久化策略
+在进行事务的过程中，首先会把binlog 写入到binlog cache中（因为写入到cache中会比较快，一个事务通常会有多个操作，避免每个操作都直接写磁盘导致性能降低），事务最终提交的时候再吧binlog 写入到磁盘中。当然事务在最终commit的时候binlog是否马上写入到磁盘中是由参数 sync_binlog 配置来决定的。
+
+1、sync_binlog=0 的时候，表示每次提交事务binlog不会马上写入到磁盘，而是先写到page cache,相对于磁盘写入来说写page cache要快得多,不过在Mysql 崩溃的时候会有丢失日志的风险。
+
+2、sync_binlog=1 的时候，表示每次提交事务都会执行 fsync 写入到磁盘 ；
+
+3、sync_binlog的值大于1 的时候，表示每次提交事务都 先写到page cach，只有等到积累了N个事务之后才fsync 写入到磁盘，同样在此设置下Mysql 崩溃的时候会有丢失N个事务日志的风险。
+
+很显然三种模式下，sync_binlog=1 是强一致的选择，选择0或者N的情况下在极端情况下就会有丢失日志的风险，具体选择什么模式还是得看系统对于一致性的要求。
+
+
+
+
