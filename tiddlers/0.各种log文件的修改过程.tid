@@ -1,6 +1,6 @@
 created: 20220706140719200
 creator: TidGiUser
-modified: 20220706144322579
+modified: 20220706233130694
 modifier: TidGiUser
 tags: mysql主从复制与读写分离
 title: 0.各种log文件的修改过程
@@ -25,7 +25,11 @@ MySQL其实是分成server层和存储引擎层两部分，每当执行一个查
 
 3. 写binlog, 此时记录的binlog日志并不会被写到binlog日志文件中，而是被暂时保存到内存的某个地方，等之后事务提交的时候才会真正将该事物执行过程中产生的所有binlog统一写入binlog日志文件
 
-4. 两阶段提交
+4. 执行commit，进行[[两阶段提交|02.redo log]]：
+	
+	1. prepare阶段： redo log刷盘， 并且状态设置为prepare
+
+	2. commit阶段：binlog刷盘,并且会将redo log状态设置commit，同时将binlog文件的位置也写入
 <<<
 
 > 事务的持久性由redo log保证, 原子性由undo log保证,详见[[01.事务隔离级别]]

@@ -1,2 +1,7 @@
-list: [[技术:对错第二, 系统化第一]]
+created: 20220706232023607
+creator: TidGiUser
+list: 设计模式 [[02.redo log]] 0.各种log文件的修改过程 mysql主从复制与读写分离 推送中台 [[技术:对错第二, 系统化第一]]
+modified: 20220706232354830
+modifier: TidGiUser
 title: $:/StoryList
+type: text/vnd.tiddlywiki
